@@ -35,13 +35,17 @@ Carpeta con la clave de acceso y documentación del VPS que originalmente alojab
 
 ## Lo que se hizo (2026-04-17)
 
-Único cambio aplicado:
+1. **Fix acceso por IP**: `/var/www/html/vtigercrm/config.inc.php` línea 82
+   - Antes: `$site_URL = 'http://149.59.192.163/';` ← typo (IP no existente)
+   - Después: `$site_URL = 'http://146.59.192.163/';`
 
-- `/var/www/html/vtigercrm/config.inc.php` línea 82
-  - Antes: `$site_URL = 'http://149.59.192.163/';` ← typo (IP no existente)
-  - Después: `$site_URL = 'http://146.59.192.163/';`
+2. **Desplegado wrapper REST** en `/var/www/html/vtigercrm/api/` (ver [rest-wrapper/README.md](rest-wrapper/README.md)):
+   - Expone REST limpio `http://146.59.192.163/api/{Module}/{id}` sobre el webservice nativo.
+   - Auth por Bearer token.
+   - Reemplaza VTRestfulAPI (incompatible con PHP 8.3).
+   - Para uso desde n8n + OpenAI.
 
-No se tocó Apache, firewall, DNS, ni nada más. La sesión de diagnóstico y cambios está documentada en el historial de conversación con Claude.
+No se tocó Apache, firewall, DNS, ni la DB de vTiger.
 
 ## Backups en el VPS
 
@@ -116,7 +120,10 @@ unset DB_PASS MYSQL_PWD
 - **Cert Let's Encrypt** de `crm.gorimagroup.it`: sigue en `/etc/letsencrypt/live/`. Inútil por ahora (el dominio apunta a otro VPS). No hace daño; renovarlo o borrarlo es decisión futura.
 - **Sin acceso al panel OVH**: no hay forma de hacer snapshot completo del VPS ni rescue mode. Si se rompe algo grave, la única red de seguridad son los backups locales arriba.
 
-## Archivos en esta carpeta
+## Archivos / carpetas en este proyecto
 
-- `gorima-2024.ppk` — clave privada PuTTY para conectar al VPS.
+- `gorima-2024.ppk` — clave privada PuTTY para conectar al VPS. **Excluida de git.**
+- `rest-wrapper/` — código del wrapper REST (deployado en el VPS en `/var/www/html/vtigercrm/api/`).
+- `rest-wrapper/SECRETS.local.txt` — token API y Access Key de vTiger. **Excluido de git.**
+- `.gitignore` — excluye claves, secretos y el clon de VTRestfulAPI (descartado).
 - `README.md` — este documento.
