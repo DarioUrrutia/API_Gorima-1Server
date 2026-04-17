@@ -1,0 +1,35 @@
+# Claves privadas SSH / certificados
+*.ppk
+*.pem
+*.key
+id_rsa
+id_rsa.pub
+
+# Secretos locales (tokens, access keys)
+**/SECRETS.local.txt
+**/*.local.txt
+**/*.secret
+
+# Config real de produccion (nunca subir)
+rest-wrapper/api/config.php
+
+# VTRestfulAPI: repo de terceros descartado, tiene su propio .git
+VTRestfulAPI/
+
+# Artefactos de despliegue
+rest-wrapper/rest-wrapper-deploy.b64
+rest-wrapper/rest-wrapper-deploy.tar.gz
+
+# Backups locales
+backups/
+*.tar.gz
+*.sql.gz
+*.sql
+
+# OS / editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~

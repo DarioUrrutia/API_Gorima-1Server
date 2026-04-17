@@ -1,0 +1,37 @@
+<?php
+// Plantilla. Copiar a /var/www/html/vtigercrm/api/config.php y editar.
+// Luego: sudo chmod 600 config.php && sudo chown www-data:www-data config.php
+
+return [
+    // URL interna del webservice nativo de vTiger.
+    // 127.0.0.1 evita ir al DNS publico.
+    'vtiger_ws_url' => 'http://127.0.0.1/webservice.php',
+
+    // Usuario admin (o con permisos suficientes) en vTiger.
+    'vtiger_user' => 'admin',
+
+    // Access Key del usuario, visible en vTiger:
+    //   My Preferences > User Advanced Options > Access Key
+    'vtiger_access_key' => 'PEGAR_AQUI_EL_ACCESS_KEY',
+
+    // Token de nuestro wrapper. Generarlo con:
+    //   openssl rand -hex 32
+    // n8n lo enviara en el header: Authorization: Bearer <token>
+    'api_token' => 'PEGAR_AQUI_UN_TOKEN_ALEATORIO_HEX_32',
+
+    // Timeout de las llamadas al webservice interno (segundos).
+    'vtiger_ws_timeout' => 30,
+
+    // Modulos permitidos. Cualquier otro modulo dara 403.
+    'allowed_modules' => [
+        'Accounts',
+        'Contacts',
+        'Potentials',
+        'Events',
+        'Calendar',
+        'ModComments',
+    ],
+
+    // Si true, incluye stack trace cuando algo falla. DEJAR EN false en produccion.
+    'debug' => false,
+];

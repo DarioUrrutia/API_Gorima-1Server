@@ -1,0 +1,16 @@
+# Proteger config.php de acceso publico
+<Files "config.php">
+    Require all denied
+</Files>
+
+# Rewrite: todo lo que entre a /api/... va a index.php con el path en query string
+RewriteEngine On
+RewriteBase /api/
+
+# Si el archivo/folder existe, servirlo normal (para assets futuros)
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# Todo lo demas a index.php, pasando el path en PATH_INFO
+RewriteRule ^(.*)$ index.php/$1 [L,QSA]
