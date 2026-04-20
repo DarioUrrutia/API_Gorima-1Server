@@ -51,7 +51,7 @@ try {
     $response = route($method, $segments, $vt, $CONFIG);
     respond(200, $response);
 } catch (ApiException $e) {
-    respond($e->httpStatus, ['error' => $e->code, 'message' => $e->getMessage(), 'details' => $e->details]);
+    respond($e->httpStatus, ['error' => $e->errorCode, 'message' => $e->getMessage(), 'details' => $e->details]);
 } catch (Throwable $e) {
     $payload = ['error' => 'internal_error', 'message' => $e->getMessage()];
     if (!empty($CONFIG['debug'])) $payload['trace'] = $e->getTraceAsString();
@@ -312,7 +312,7 @@ class VtigerClient
 
 class ApiException extends Exception
 {
-    public function __construct(public string $code, string $message, public int $httpStatus = 400, public mixed $details = null)
+    public function __construct(public string $errorCode, string $message, public int $httpStatus = 400, public mixed $details = null)
     {
         parent::__construct($message);
     }
