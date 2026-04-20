@@ -1,0 +1,182 @@
+{
+  "name": "vTiger Agent - Demo (SS106 + comentar)",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "chat-trigger-node",
+      "name": "When chat message received",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -100,
+        0
+      ],
+      "webhookId": "vtiger-demo-chat"
+    },
+    {
+      "parameters": {
+        "promptType": "auto",
+        "options": {
+          "systemMessage": "Sei un assistente che interagisce con il CRM vTiger dell'azienda Gorima usando un REST wrapper.\n\nQuando l'utente ti chiede informazioni su opportunità (Potentials) usa lo strumento `search_potentials` passando come `q` una parola chiave (nome strada, località, regione, CIG, ecc.). Ritorna SEMPRE una lista compatta con: id, potentialname, sales_stage, amount, closingdate, cf_919 (strada), cf_895 (località), cf_969 (regione).\n\nQuando l'utente vuole aggiungere un commento a una opportunità, usa `add_comment_to_potential` con l'id (formato `13xNNNN`) e il contenuto. Conferma all'utente che il commento è stato aggiunto mostrando l'id del commento.\n\nRispondi sempre in italiano. Sii conciso."
+        }
+      },
+      "id": "ai-agent-node",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list"
+        },
+        "options": {}
+      },
+      "id": "openai-model-node",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        80,
+        220
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "REEMPLAZAR_CON_CREDENCIAL_OPENAI",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Cerca opportunità (Potentials) nel CRM vTiger per parola chiave. Cerca in: potentialname, potential_no, description, cf_919 (Nome Strada), cf_925 (Descrizione), cf_895 (Località), cf_897 (Aggiudicatario), cf_891 (CIG), cf_859 (CUP). Usa questo quando l'utente chiede 'cerca opportunità di X' o 'opportunità in zona Y'.",
+        "method": "GET",
+        "url": "http://146.59.192.163/api/Potentials",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer REEMPLAZAR_CON_TU_API_TOKEN"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "valueProvider": "modelRequired",
+              "value": "",
+              "description": "Parola chiave da cercare (es. SS106, JONICA, Catanzaro, ANAS)"
+            },
+            {
+              "name": "limit",
+              "value": "20"
+            }
+          ]
+        }
+      },
+      "id": "tool-search-potentials",
+      "name": "search_potentials",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        300,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "toolDescription": "Aggiunge un commento (ModComments) ad una opportunità esistente. Richiede: potential_id in formato '13xNNNN' (lo puoi ottenere prima da search_potentials), e il contenuto testuale del commento.",
+        "method": "POST",
+        "url": "=http://146.59.192.163/api/Potentials/{{ $fromAI('potential_id', 'ID opportunità formato 13xNNNN', 'string') }}/comments",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer REEMPLAZAR_CON_TU_API_TOKEN"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"content\": \"{{ $fromAI('content', 'testo del commento', 'string') }}\"\n}"
+      },
+      "id": "tool-add-comment",
+      "name": "add_comment_to_potential",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        540,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "search_potentials": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "add_comment_to_potential": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "placeholder"
+  }
+}
