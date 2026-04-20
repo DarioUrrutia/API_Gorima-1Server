@@ -184,12 +184,15 @@ class VtigerClient
         $vtqlWhere = '';
         if ($q !== '') {
             // Busqueda simple contra campos textuales principales.
+            // Campos donde el parametro ?q= buscara con LIKE.
+            // Pensado para que el agente (LLM) pueda encontrar registros por palabras clave
+            // del lenguaje natural: nombre, telefono, IVA, strada, localita, descripcion, etc.
             $fieldMap = [
-                'Accounts'    => ['accountname', 'email1', 'phone'],
-                'Contacts'    => ['firstname', 'lastname', 'email'],
-                'Potentials'  => ['potentialname', 'potential_no'],
-                'Events'      => ['subject'],
-                'Calendar'    => ['subject'],
+                'Accounts'    => ['accountname', 'email1', 'phone', 'cf_1107', 'cf_1105', 'cf_1103', 'cf_1111', 'cf_1125'],
+                'Contacts'    => ['firstname', 'lastname', 'email', 'phone'],
+                'Potentials'  => ['potentialname', 'potential_no', 'description', 'cf_919', 'cf_925', 'cf_895', 'cf_897', 'cf_891', 'cf_859'],
+                'Events'      => ['subject', 'location', 'description'],
+                'Calendar'    => ['subject', 'location', 'description'],
                 'ModComments' => ['commentcontent'],
             ];
             $cands = $fieldMap[$module] ?? ['*'];
