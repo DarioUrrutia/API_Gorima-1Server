@@ -4,10 +4,23 @@
 *.key
 id_rsa
 id_rsa.pub
+keys/
+
+# Scripts locales con token hardcoded / claves / debug ad-hoc
+scripts/_archive/
+scripts/ssh/
+scripts/vtiger/describe_modules.py
+scripts/vtiger/test_update_contact.py
+scripts/n8n/n8n.local.json
+scripts/n8n/__pycache__/
+# one-shot scripts que dejaron el vTiger api_token hardcoded — ya aplicados
+scripts/n8n/n8n_add_tools.py
+scripts/n8n/n8n_reorganize.py
 
 # Secretos locales (tokens, access keys)
 **/SECRETS.local.txt
 **/*.local.txt
+**/*.local.json
 **/*.secret
 
 # Config real de produccion (nunca subir)
@@ -25,6 +38,10 @@ backups/
 *.tar.gz
 *.sql.gz
 *.sql
+
+# Python cache
+__pycache__/
+*.pyc
 
 # OS / editores
 .DS_Store

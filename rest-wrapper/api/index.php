@@ -178,7 +178,8 @@ class VtigerClient
         $this->login();
         $limit  = max(1, min(200, (int)($query['limit']  ?? 50)));
         $offset = max(0, (int)($query['offset'] ?? 0));
-        $fields = isset($query['fields']) ? preg_replace('/[^a-zA-Z0-9_,]/', '', (string)$query['fields']) : '*';
+        $userFields = isset($query['fields']) ? preg_replace('/[^a-zA-Z0-9_,]/', '', (string)$query['fields']) : '*';
+        $fields = $userFields; // SELECT final — se extenderá con search fields abajo si hace falta
         $q      = $query['q'] ?? '';
 
         $vtqlWhere = '';
@@ -190,24 +191,105 @@ class VtigerClient
             $fieldMap = [
                 'Accounts'    => ['accountname', 'email1', 'phone', 'cf_1107', 'cf_1105', 'cf_1103', 'cf_1111', 'cf_1125'],
                 'Contacts'    => ['firstname', 'lastname', 'email', 'phone'],
-                'Potentials'  => ['potentialname', 'potential_no', 'description', 'cf_919', 'cf_925', 'cf_895', 'cf_897', 'cf_891', 'cf_859'],
+                'Potentials'  => ['potentialname', 'potential_no', 'description', 'cf_919', 'cf_925', 'cf_895', 'cf_897', 'cf_891', 'cf_859', 'cf_969', 'cf_915', 'cf_913', 'cf_1009'],
                 'Events'      => ['subject', 'location', 'description'],
                 'Calendar'    => ['subject', 'location', 'description'],
                 'ModComments' => ['commentcontent'],
             ];
             $cands = $fieldMap[$module] ?? ['*'];
-            $escaped = str_replace(["'", '%'], ["\\'", '\\%'], (string)$q);
-            $parts = [];
-            foreach ($cands as $f) {
-                if ($f === '*') continue;
-                $parts[] = "$f LIKE '%$escaped%'";
+            // Tokeniza q por espacios. VTQL no soporta paréntesis, así que armamos
+            // un OR plano con todos (token × variant × field) como WHERE para traer
+            // un superconjunto, y luego filtramos en PHP (más abajo) exigiendo que
+            // cada token aparezca en algún campo del record (AND entre tokens).
+            // Para cada token generamos variantes si hay frontera letra-dígito
+            // (ej "SS106" -> también "SS 106"), así el CRM italiano donde se escribe
+            // "SS 106" con espacio matchea cuando el LLM pasa "SS106" pegado.
+            $variants = function (string $tok): array {
+                $v = [$tok];
+                if (preg_match('/^(\p{L}+)(\d.+)$/u', $tok, $m)) $v[] = $m[1] . ' ' . $m[2];
+                if (preg_match('/^(\d+)(\p{L}.+)$/u', $tok, $m)) $v[] = $m[1] . ' ' . $m[2];
+                return array_values(array_unique($v));
+            };
+            $tokens = preg_split('/\s+/', trim((string)$q)) ?: [];
+            // Stopwords italianas/inglesas/frases conversacionales: el agente LLM
+            // suele mandar "cerca opportunità SS106" en vez de "SS106"; limpiamos
+            // esas palabras para que queden solo los keywords reales.
+            $stop = [
+                'a','al','alla','allo','ai','agli','alle','da','dal','dalla','dallo','dai','dagli','dalle',
+                'di','del','della','dello','dei','degli','delle','in','nel','nella','nello','nei','negli','nelle',
+                'su','sul','sulla','sullo','sui','sugli','sulle','per','con','e','o','ed','od','ma','se',
+                'il','lo','la','i','gli','le','un','uno','una','che','cui','dove','quando','come',
+                'cerca','cercare','trova','trovare','mostra','mostrami','dammi','voglio','vorrei','ho','bisogno',
+                'opportunita','opportunità','opportunity','opportunities','potential','potentials',
+                'azienda','aziende','account','accounts','contatto','contatti','contact','contacts',
+                'evento','eventi','event','events','commento','commenti','comment','comments',
+                'zona','regione','localita','località','strada','via',
+                'the','of','and','or','for','with','in','on','at','by','a','an','is','are','was','were','be','to','find','search','show','get','list','about','near',
+            ];
+            $tokens = array_values(array_filter(
+                array_map(fn($t) => trim((string)$t), $tokens),
+                fn($t) => $t !== '' && mb_strlen($t) >= 2 && !in_array(mb_strtolower($t), $stop, true)
+            ));
+            $orParts = [];
+            foreach ($tokens as $tok) {
+                foreach ($variants($tok) as $var) {
+                    $escaped = str_replace(["'", '%'], ["\\'", '\\%'], $var);
+                    foreach ($cands as $f) {
+                        if ($f === '*') continue;
+                        $orParts[] = "$f LIKE '%$escaped%'";
+                    }
+                }
             }
-            if ($parts) $vtqlWhere = ' WHERE ' . implode(' OR ', $parts);
+            if ($orParts) $vtqlWhere = ' WHERE ' . implode(' OR ', $orParts);
+
+            // Si el usuario pidió campos específicos, aseguramos incluir los
+            // search fields en el SELECT para que el post-filter PHP funcione.
+            // Luego abajo filtramos el output para devolver solo lo pedido.
+            if ($userFields !== '*') {
+                $userList = array_filter(array_map('trim', explode(',', $userFields)));
+                $needed = array_unique(array_merge($userList, array_filter($cands, fn($f) => $f !== '*')));
+                $fields = implode(',', $needed);
+            }
         }
 
-        $vtql = "SELECT $fields FROM $module" . $vtqlWhere . " LIMIT $offset, $limit;";
+        // Con multi-token pedimos más candidatos (el OR plano amplía el superconjunto)
+        // y luego filtramos abajo para dejar solo los que contienen TODOS los tokens.
+        $queryLimit  = (isset($tokens) && count($tokens) > 1) ? min(200, $limit * 5) : $limit;
+        $queryOffset = (isset($tokens) && count($tokens) > 1) ? 0 : $offset;
+        $vtql = "SELECT $fields FROM $module" . $vtqlWhere . " LIMIT $queryOffset, $queryLimit;";
         $result = $this->wsGet(['operation' => 'query', 'sessionName' => $this->sessionName, 'query' => $vtql]);
-        return ['module' => $module, 'count' => is_array($result) ? count($result) : 0, 'items' => $result];
+        if (!is_array($result)) $result = [];
+
+        if (isset($tokens) && count($tokens) > 0) {
+            $result = array_values(array_filter($result, function ($row) use ($tokens, $cands, $variants) {
+                $hay = '';
+                foreach ($cands as $f) {
+                    if ($f === '*') continue;
+                    if (isset($row[$f])) $hay .= ' ' . $row[$f];
+                }
+                $hayLower = mb_strtolower($hay);
+                foreach ($tokens as $tok) {
+                    $matched = false;
+                    foreach ($variants($tok) as $var) {
+                        if (mb_strpos($hayLower, mb_strtolower($var)) !== false) { $matched = true; break; }
+                    }
+                    if (!$matched) return false;
+                }
+                return true;
+            }));
+            $result = array_slice($result, $offset, $limit);
+        }
+
+        // Si el usuario pidió campos específicos, trimamos el output a solo esos
+        // (internamente habíamos añadido los search fields para el post-filter).
+        if ($userFields !== '*') {
+            $keep = array_filter(array_map('trim', explode(',', $userFields)));
+            $keepSet = array_flip($keep);
+            $result = array_map(function ($row) use ($keepSet) {
+                return array_intersect_key($row, $keepSet);
+            }, $result);
+        }
+        return ['module' => $module, 'count' => count($result), 'items' => $result];
     }
 
     public function create(string $module, array $data): array
