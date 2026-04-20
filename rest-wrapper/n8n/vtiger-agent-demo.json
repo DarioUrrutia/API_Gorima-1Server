@@ -19,7 +19,7 @@
       "parameters": {
         "promptType": "auto",
         "options": {
-          "systemMessage": "Sei un assistente che interagisce con il CRM vTiger dell'azienda Gorima usando un REST wrapper.\n\nQuando l'utente ti chiede informazioni su opportunità (Potentials) usa lo strumento `search_potentials` passando come `q` una parola chiave (nome strada, località, regione, CIG, ecc.). Ritorna SEMPRE una lista compatta con: id, potentialname, sales_stage, amount, closingdate, cf_919 (strada), cf_895 (località), cf_969 (regione).\n\nQuando l'utente vuole aggiungere un commento a una opportunità, usa `add_comment_to_potential` con l'id (formato `13xNNNN`) e il contenuto. Conferma all'utente che il commento è stato aggiunto mostrando l'id del commento.\n\nRispondi sempre in italiano. Sii conciso."
+          "systemMessage": "Sei un assistente che interagisce con il CRM vTiger dell'azienda Gorima usando un REST wrapper.\n\nQuando l'utente chiede informazioni su opportunità (Potentials) usa lo strumento `search_potentials` passando come `q` una parola chiave (nome strada, località, regione, CIG, CUP, partita IVA, nome azienda appaltatrice). Per ogni risultato mostra in modo compatto: id, potentialname, sales_stage, amount, closingdate, strada (cf_919), località (cf_895), regione (cf_969), CIG (cf_891).\n\nQuando l'utente vuole aggiungere un commento a una opportunità, usa `add_comment_to_potential` con l'id (formato `13xNNNN`, lo ottieni da search_potentials) e il contenuto. Conferma all'utente che il commento è stato aggiunto mostrando l'id del commento creato.\n\nRispondi sempre in italiano. Sii conciso e chiaro."
         }
       },
       "id": "ai-agent-node",
@@ -47,40 +47,19 @@
       "position": [
         80,
         220
-      ],
-      "credentials": {
-        "openAiApi": {
-          "id": "REEMPLAZAR_CON_CREDENCIAL_OPENAI",
-          "name": "OpenAI API"
-        }
-      }
+      ]
     },
     {
       "parameters": {
         "toolDescription": "Cerca opportunità (Potentials) nel CRM vTiger per parola chiave. Cerca in: potentialname, potential_no, description, cf_919 (Nome Strada), cf_925 (Descrizione), cf_895 (Località), cf_897 (Aggiudicatario), cf_891 (CIG), cf_859 (CUP). Usa questo quando l'utente chiede 'cerca opportunità di X' o 'opportunità in zona Y'.",
         "method": "GET",
-        "url": "http://146.59.192.163/api/Potentials",
+        "url": "=http://146.59.192.163/api/Potentials?q={{ encodeURIComponent($fromAI('q', 'parola chiave per cercare opportunità: SS106, JONICA, Catanzaro, ANAS, CIG, IVA, nome strada, localita', 'string')) }}&limit=20",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "Authorization",
               "value": "Bearer REEMPLAZAR_CON_TU_API_TOKEN"
-            }
-          ]
-        },
-        "sendQuery": true,
-        "queryParameters": {
-          "parameters": [
-            {
-              "name": "q",
-              "valueProvider": "modelRequired",
-              "value": "",
-              "description": "Parola chiave da cercare (es. SS106, JONICA, Catanzaro, ANAS)"
-            },
-            {
-              "name": "limit",
-              "value": "20"
             }
           ]
         }
@@ -98,7 +77,7 @@
       "parameters": {
         "toolDescription": "Aggiunge un commento (ModComments) ad una opportunità esistente. Richiede: potential_id in formato '13xNNNN' (lo puoi ottenere prima da search_potentials), e il contenuto testuale del commento.",
         "method": "POST",
-        "url": "=http://146.59.192.163/api/Potentials/{{ $fromAI('potential_id', 'ID opportunità formato 13xNNNN', 'string') }}/comments",
+        "url": "=http://146.59.192.163/api/Potentials/{{ $fromAI('potential_id', 'ID opportunità in formato 13xNNNN', 'string') }}/comments",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -114,7 +93,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"content\": \"{{ $fromAI('content', 'testo del commento', 'string') }}\"\n}"
+        "jsonBody": "={ \"content\": \"{{ $fromAI('content', 'testo del commento da aggiungere', 'string') }}\" }"
       },
       "id": "tool-add-comment",
       "name": "add_comment_to_potential",
