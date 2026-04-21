@@ -258,10 +258,17 @@ Reglas personales:
       (con Bearer redactado por `n8n_export_workflow.py`).
 - [x] Picklists con valores reales de DB (no defaults vTiger genéricos).
 - [x] Flujo de input parcial con riepilogo vacío como plantilla.
+- [x] `search_contacts.q` con forma nativa `{"name":"q"}` (commit
+      `a6243df`) — el `$fromAI(...,'string','')` con default hacía q
+      opcional y el LLM lo omitía. Feature `f_account_id` retirada del
+      tool; el flujo de create_event ahora pregunta al usuario en texto.
 - [ ] Eliminar el patch de debug de `readJsonBody()` en el wrapper del VPS
       cuando el flujo esté 100% validado. Script:
       `scripts/ssh/ssh_fix_debug.py` hace el inverso fácilmente
       (subir versión limpia).
+- [ ] Re-exportar el workflow snapshot con
+      `python scripts/n8n/n8n_export_workflow.py` antes de cerrar la
+      semana (refleja los últimos cambios en search_contacts y prompt).
 - [ ] Tests unitarios / smoke automatizados para el wrapper (hoy todo manual).
 
 ---
