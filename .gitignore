@@ -16,6 +16,7 @@ scripts/n8n/__pycache__/
 # one-shot scripts que dejaron el vTiger api_token hardcoded — ya aplicados
 scripts/n8n/n8n_add_tools.py
 scripts/n8n/n8n_reorganize.py
+scripts/n8n/n8n_add_get_tools.py
 
 # Secretos locales (tokens, access keys)
 **/SECRETS.local.txt

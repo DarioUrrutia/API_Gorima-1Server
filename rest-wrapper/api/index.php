@@ -115,6 +115,8 @@ class VtigerClient
     private ?string $sessionName = null;
     private ?string $userId = null;
     private array $modulePrefixCache = [];
+    private ?array $dbConfig = null;
+    private ?\PDO $pdo = null;
 
     public function __construct(array $config)
     {
@@ -122,6 +124,57 @@ class VtigerClient
         $this->user = $config['vtiger_user'];
         $this->accessKey = $config['vtiger_access_key'];
         $this->timeout = (int)($config['vtiger_ws_timeout'] ?? 30);
+        $this->dbConfig = isset($config['db']) && is_array($config['db']) ? $config['db'] : null;
+    }
+
+    /**
+     * Removes soft-deleted records (vtiger_crmentity.deleted=1) from a listRecords result.
+     * VTQL in this vTiger build does not always auto-filter deleted rows, and a subsequent
+     * retrieve on a deleted crmid returns ACCESS_DENIED (502). We strip them upstream so
+     * the agent never sees zombie records. Defensive: if db is not configured or the query
+     * fails, the original result is returned untouched (no behavior change for validated flows).
+     */
+    private function filterDeleted(array $rows): array
+    {
+        if (!$rows || !$this->dbConfig) return $rows;
+        $ids = [];
+        foreach ($rows as $r) {
+            $raw = $r['id'] ?? '';
+            if (is_string($raw) && strpos($raw, 'x') !== false) {
+                $parts = explode('x', $raw, 2);
+                $num = (int)($parts[1] ?? 0);
+            } else {
+                $num = (int)$raw;
+            }
+            if ($num > 0) $ids[$num] = true;
+        }
+        if (!$ids) return $rows;
+        try {
+            if ($this->pdo === null) {
+                $db = $this->dbConfig;
+                $dsn = "mysql:host={$db['host']};port=" . ($db['port'] ?? 3306) . ";dbname={$db['name']};charset=utf8mb4";
+                $this->pdo = new \PDO($dsn, $db['user'], $db['password'], [
+                    \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
+                    \PDO::ATTR_TIMEOUT => 3,
+                ]);
+            }
+            $idList = array_keys($ids);
+            $place = implode(',', array_fill(0, count($idList), '?'));
+            $stmt = $this->pdo->prepare("SELECT crmid FROM vtiger_crmentity WHERE crmid IN ($place) AND deleted=0");
+            $stmt->execute($idList);
+            $alive = array_flip(array_map('intval', $stmt->fetchAll(\PDO::FETCH_COLUMN)));
+            return array_values(array_filter($rows, function ($r) use ($alive) {
+                $raw = $r['id'] ?? '';
+                if (is_string($raw) && strpos($raw, 'x') !== false) {
+                    $num = (int)explode('x', $raw, 2)[1];
+                } else {
+                    $num = (int)$raw;
+                }
+                return isset($alive[$num]);
+            }));
+        } catch (\Throwable $e) {
+            return $rows;
+        }
     }
 
     private function login(): void
@@ -182,7 +235,24 @@ class VtigerClient
         $fields = $userFields; // SELECT final — se extenderá con search fields abajo si hace falta
         $q      = $query['q'] ?? '';
 
+        // Filtros por igualdad en campos específicos (?f_<field>=<value>). Se
+        // combinan con AND entre sí y con AND al eventual bloque OR de ?q=.
+        // Ej: /api/Contacts?f_account_id=11x3358 → contactos de esa azienda.
+        $filterClauses = [];
+        foreach ($query as $k => $v) {
+            if (!is_string($k) || strncmp($k, 'f_', 2) !== 0) continue;
+            if (!is_scalar($v)) continue;
+            $field = preg_replace('/[^a-zA-Z0-9_]/', '', substr($k, 2)) ?? '';
+            $val = (string)$v;
+            if ($field === '' || $val === '') continue;
+            $escaped = str_replace(["\\", "'"], ["\\\\", "\\'"], $val);
+            $filterClauses[] = "$field = '$escaped'";
+        }
+
         $vtqlWhere = '';
+        $orParts = [];
+        $tokens = [];
+        $cands = [];
         if ($q !== '') {
             // Busqueda simple contra campos textuales principales.
             // Campos donde el parametro ?q= buscara con LIKE.
@@ -204,10 +274,22 @@ class VtigerClient
             // Para cada token generamos variantes si hay frontera letra-dígito
             // (ej "SS106" -> también "SS 106"), así el CRM italiano donde se escribe
             // "SS 106" con espacio matchea cuando el LLM pasa "SS106" pegado.
-            $variants = function (string $tok): array {
+            // Normaliza "X" → alfanumerico puro en minuscula (sirve para comparar
+            // "SS 106" ↔ "ss106" ↔ "S.S. 106" ↔ "s.s.106").
+            $normalize = fn(string $s): string => mb_strtolower((string)preg_replace('/[^\p{L}\p{N}]+/u', '', $s));
+            $variants = function (string $tok) use ($normalize): array {
                 $v = [$tok];
-                if (preg_match('/^(\p{L}+)(\d.+)$/u', $tok, $m)) $v[] = $m[1] . ' ' . $m[2];
-                if (preg_match('/^(\d+)(\p{L}.+)$/u', $tok, $m)) $v[] = $m[1] . ' ' . $m[2];
+                $clean = $normalize($tok);
+                if ($clean !== '' && $clean !== mb_strtolower($tok)) $v[] = $clean;
+                if (preg_match('/^(\p{L}+)(\d+.*)$/u', $tok, $m)) $v[] = $m[1] . ' ' . $m[2];
+                if (preg_match('/^(\d+)(\p{L}+.*)$/u', $tok, $m)) $v[] = $m[1] . ' ' . $m[2];
+                if (preg_match('/^(\p{L}+)(\d+.*)$/u', $clean, $m)) $v[] = $m[1] . ' ' . $m[2];
+                if (preg_match('/^(\d+)(\p{L}+.*)$/u', $clean, $m)) $v[] = $m[1] . ' ' . $m[2];
+                if (preg_match('/^\p{L}{2,4}$/u', $clean)) {
+                    $dotted = '';
+                    foreach (preg_split('//u', $clean, -1, PREG_SPLIT_NO_EMPTY) as $c) $dotted .= $c . '.';
+                    $v[] = $dotted;
+                }
                 return array_values(array_unique($v));
             };
             $tokens = preg_split('/\s+/', trim((string)$q)) ?: [];
@@ -228,7 +310,7 @@ class VtigerClient
             ];
             $tokens = array_values(array_filter(
                 array_map(fn($t) => trim((string)$t), $tokens),
-                fn($t) => $t !== '' && mb_strlen($t) >= 2 && !in_array(mb_strtolower($t), $stop, true)
+                fn($t) => $t !== '' && (mb_strlen($t) >= 2 || ctype_digit($t)) && !in_array(mb_strtolower($t), $stop, true)
             ));
             $orParts = [];
             foreach ($tokens as $tok) {
@@ -239,9 +321,22 @@ class VtigerClient
                         $orParts[] = "$f LIKE '%$escaped%'";
                     }
                 }
+                // Wildcard LIKE: para tokens cortos (≤6 chars alfanumericos), insertamos
+                // '%' entre cada caracter normalizado. Permite matchear el mismo token
+                // en el CRM aunque tenga cualquier separador (dot, space, dash, etc.).
+                // Ej: "ra5" → "%r%a%5%" matchea "R.A. 5", "R A 5", "RA-5", "R.A.5".
+                // El post-filter normaliza exacto y descarta falsos positivos.
+                $clean = $normalize($tok);
+                $len = mb_strlen($clean);
+                if ($len >= 2 && $len <= 6) {
+                    $parts = preg_split('//u', $clean, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+                    $wild = implode('%', $parts);
+                    foreach ($cands as $f) {
+                        if ($f === '*') continue;
+                        $orParts[] = "$f LIKE '%$wild%'";
+                    }
+                }
             }
-            if ($orParts) $vtqlWhere = ' WHERE ' . implode(' OR ', $orParts);
-
             // Si el usuario pidió campos específicos, aseguramos incluir los
             // search fields en el SELECT para que el post-filter PHP funcione.
             // Luego abajo filtramos el output para devolver solo lo pedido.
@@ -252,28 +347,41 @@ class VtigerClient
             }
         }
 
-        // Con multi-token pedimos más candidatos (el OR plano amplía el superconjunto)
-        // y luego filtramos abajo para dejar solo los que contienen TODOS los tokens.
-        $queryLimit  = (isset($tokens) && count($tokens) > 1) ? min(200, $limit * 5) : $limit;
-        $queryOffset = (isset($tokens) && count($tokens) > 1) ? 0 : $offset;
+        // Ensamblado final del WHERE. VTQL no soporta parentesis, asi que para
+        // combinar el grupo OR (de ?q=) con filtros AND (de ?f_*=) distribuimos:
+        //   (a OR b) AND c AND d  ==  (a AND c AND d) OR (b AND c AND d)
+        // gracias a la precedencia SQL (AND > OR).
+        if (!empty($orParts)) {
+            if (!empty($filterClauses)) {
+                $tail = ' AND ' . implode(' AND ', $filterClauses);
+                $orParts = array_map(fn($p) => $p . $tail, $orParts);
+            }
+            $vtqlWhere = ' WHERE ' . implode(' OR ', $orParts);
+        } elseif (!empty($filterClauses)) {
+            $vtqlWhere = ' WHERE ' . implode(' AND ', $filterClauses);
+        }
+
+        // OR plano + wildcard LIKE pueden traer superconjunto de candidatos;
+        // pedimos siempre más candidatos para que el post-filter decida (5x + cap 200).
+        $queryLimit  = isset($tokens) && count($tokens) > 0 ? min(200, $limit * 5) : $limit;
+        $queryOffset = isset($tokens) && count($tokens) > 0 ? 0 : $offset;
         $vtql = "SELECT $fields FROM $module" . $vtqlWhere . " LIMIT $queryOffset, $queryLimit;";
         $result = $this->wsGet(['operation' => 'query', 'sessionName' => $this->sessionName, 'query' => $vtql]);
         if (!is_array($result)) $result = [];
+        $result = $this->filterDeleted($result);
 
         if (isset($tokens) && count($tokens) > 0) {
-            $result = array_values(array_filter($result, function ($row) use ($tokens, $cands, $variants) {
+            $result = array_values(array_filter($result, function ($row) use ($tokens, $cands, $variants, $normalize) {
                 $hay = '';
                 foreach ($cands as $f) {
                     if ($f === '*') continue;
                     if (isset($row[$f])) $hay .= ' ' . $row[$f];
                 }
-                $hayLower = mb_strtolower($hay);
+                $hayNorm = $normalize($hay);
                 foreach ($tokens as $tok) {
-                    $matched = false;
-                    foreach ($variants($tok) as $var) {
-                        if (mb_strpos($hayLower, mb_strtolower($var)) !== false) { $matched = true; break; }
-                    }
-                    if (!$matched) return false;
+                    $tokNorm = $normalize($tok);
+                    if ($tokNorm === '') continue;
+                    if (mb_strpos($hayNorm, $tokNorm) === false) return false;
                 }
                 return true;
             }));
@@ -292,9 +400,27 @@ class VtigerClient
         return ['module' => $module, 'count' => count($result), 'items' => $result];
     }
 
+    /**
+     * Rete di sicurezza: scarta dal body i campi con valore segnaposto.
+     * Il prompt dell'agente usa "—" (em dash) SOLO per visualizzare "vuoto"
+     * all'utente, ma a volte l'LLM lo passa come valore reale e vTiger si
+     * rompe su campi numerici/data. Qui lo trattiamo come vuoto.
+     */
+    private function stripPlaceholders(array $data): array
+    {
+        $placeholders = ["\xe2\x80\x94", '—', '-', '--', 'N/A', 'n/a', 'null', 'NULL', ''];
+        $out = [];
+        foreach ($data as $k => $v) {
+            if (is_string($v) && in_array(trim($v), $placeholders, true)) continue;
+            $out[$k] = $v;
+        }
+        return $out;
+    }
+
     public function create(string $module, array $data): array
     {
         $this->login();
+        $data = $this->stripPlaceholders($data);
         return $this->wsPost([
             'operation'   => 'create',
             'sessionName' => $this->sessionName,
@@ -306,6 +432,7 @@ class VtigerClient
     public function update(string $module, string $id, array $data): array
     {
         $this->login();
+        $data = $this->stripPlaceholders($data);
         $data['id'] = $this->toWsId($module, $id);
         return $this->wsPost([
             'operation'   => 'revise',
@@ -423,6 +550,7 @@ function extractBearer(): ?string
 function readJsonBody(): array
 {
     $raw = file_get_contents('php://input');
+    @file_put_contents('/tmp/vt_body.log', date('H:i:s').' '.($_SERVER['REQUEST_METHOD']??'?').' '.($_SERVER['REQUEST_URI']??'?').' body='.$raw."\n", FILE_APPEND);
     if ($raw === false || $raw === '') return [];
     $data = json_decode($raw, true);
     if (!is_array($data)) throw new ApiException('invalid_json', 'Body no es JSON valido', 400);

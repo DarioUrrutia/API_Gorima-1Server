@@ -18,13 +18,14 @@ def _load_key() -> str:
             return json.loads(local_json.read_text(encoding="utf-8"))["key"].strip()
         except Exception:
             pass
-    # fall back to repo-root N8N.local.txt
+    # fall back: find a JWT-looking token (eyJ...) in any N8N.local.txt
+    import re
+    jwt = re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
     for p in [here.parents[1] / "N8N.local.txt", here.parents[1] / "rest-wrapper" / "N8N.local.txt"]:
         if p.exists():
-            for line in p.read_text(encoding="utf-8").splitlines():
-                s = line.strip()
-                if s and not s.startswith("#"):
-                    return s
+            m = jwt.search(p.read_text(encoding="utf-8"))
+            if m:
+                return m.group(0)
     sys.exit(
         "n8n_api: no API key found. Set env N8N_API_KEY, "
         "or create scripts/n8n/n8n.local.json with {\"key\": \"...\"}, "

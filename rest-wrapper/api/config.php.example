@@ -34,4 +34,18 @@ return [
 
     // Si true, incluye stack trace cuando algo falla. DEJAR EN false en produccion.
     'debug' => false,
+
+    // Conexion a la DB de vTiger. Se usa SOLO como red de seguridad en el
+    // endpoint de lista: post-filtra los registros soft-deleted consultando
+    // vtiger_crmentity.deleted=0. Sin este bloque, el wrapper sigue
+    // funcionando pero puede devolver fantasmas (crmid borrado -> retrieve
+    // 502 ACCESS_DENIED cuando el agente intenta leerlos).
+    // Los valores coinciden con los de vtigercrm/config.inc.php.
+    'db' => [
+        'host' => 'localhost',
+        'port' => 3306,
+        'name' => 'vtiger',
+        'user' => 'PEGAR_DB_USER',
+        'password' => 'PEGAR_DB_PASSWORD',
+    ],
 ];

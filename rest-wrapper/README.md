@@ -8,13 +8,26 @@ Sustituye a VTRestfulAPI (repo abandonado de 2017, incompatible con PHP 8). Expo
 
 | Método | Ruta | Efecto |
 |---|---|---|
-| `GET` | `/api/{Module}` | Lista. Params: `?q=...&limit=50&offset=0&fields=*` |
+| `GET` | `/api/{Module}` | Lista. Params: `?q=...&f_<field>=<value>&limit=50&offset=0&fields=*` |
 | `GET` | `/api/{Module}/describe` | Schema del módulo (campos, idPrefix, etc.) |
 | `GET` | `/api/{Module}/{id}` | Lee un registro (id puede ser numérico o `11x123`) |
 | `POST` | `/api/{Module}` | Crea registro. Body JSON con los campos |
 | `PUT` | `/api/{Module}/{id}` | Actualiza parcial. Body JSON con los campos a cambiar |
 | `DELETE` | `/api/{Module}/{id}` | Borra |
 | `POST` | `/api/{Module}/{id}/comments` | Añade comentario (ModComments) al registro. Body `{"content":"..."}` |
+
+### Parámetros de búsqueda (`GET /api/{Module}`)
+
+- **`q=<keywords>`**: búsqueda textual multi-campo. Soporta múltiples tokens
+  (combinados con AND), variantes letra↔dígito, y hit en campos custom
+  relevantes por módulo (para Potentials: `cf_969` regione, `cf_919` strada,
+  `cf_1009` stazione appaltante, `cf_891` CIG, `cf_859` CUP, etc.).
+- **`f_<field>=<value>`**: filtro por igualdad exacta sobre un campo
+  concreto. Ej. `?f_account_id=11x3358` → contactos de esa azienda.
+  Se pueden combinar varios `f_*` (todos AND) y con `q` al mismo tiempo.
+- **Soft-deletes**: se filtran automáticamente vía post-query a
+  `vtiger_crmentity.deleted=0`. Requiere bloque `db` en `config.php`
+  (ver `config.php.example`).
 
 Módulos permitidos por defecto (editable en `config.php`): Accounts, Contacts, Potentials, Events, Calendar, ModComments.
 
@@ -82,3 +95,23 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
 - **Protocolo**: por ahora HTTP (no HTTPS por IP). El token viaja en claro. Aceptado para uso interno + n8n → VPS.
 - **Login cacheado por request**: cada request hace un getchallenge + login al webservice nativo (~100ms overhead). Suficiente para uso conversacional. Si aumenta el tráfico, cachear sesión en APCu.
 - **IDs**: el wrapper acepta IDs numéricos (`123`) o webservice IDs (`11x123`). Internamente resuelve el prefijo del módulo via describe.
+- **Placeholders**: el wrapper descarta valores tipo `—`, `--`, `N/A`, `null`
+  o cadenas vacías antes de enviar a `create/revise`. Evita que un LLM que
+  confunde un campo vacío visual con un valor real rompa campos obligatorios.
+
+## Agent de n8n (`/n8n/vtiger-agent-demo.json`)
+
+Snapshot del workflow importable en otra instancia de n8n:
+
+1. En n8n: Workflows → Import from File → seleccionar `vtiger-agent-demo.json`.
+2. En cada nodo HTTP tool, buscar y reemplazar `__REPLACE_WITH_API_TOKEN__`
+   por el Bearer real del wrapper (el mismo valor de `api_token` en
+   `config.php`). El export lo sanitiza por seguridad.
+3. Conectar las credenciales de OpenAI en el nodo "OpenAI Chat Model".
+4. Ajustar el modelo si se prefiere (demostrado con `gpt-4o`; `-mini` no
+   cumple las reglas).
+
+El prompt y la lista de campos por entidad están versionados en el repo
+principal bajo `scripts/n8n/_sys_prompt_current.txt` y
+`scripts/n8n/n8n_keypair_body.py` respectivamente. Regenerar el workflow
+tras cambios con `python scripts/n8n/n8n_export_workflow.py`.

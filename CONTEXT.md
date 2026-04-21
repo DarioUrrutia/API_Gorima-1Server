@@ -4,7 +4,7 @@
 > para retomar sin perder el hilo. Si el usuario me dice "lee el contexto",
 > empiezo por este archivo y por `scripts/n8n/n8n_api.py`.
 
-Última actualización: 2026-04-20
+Última actualización: 2026-04-21
 
 ---
 
@@ -114,26 +114,87 @@ Script que aplica esta forma: `scripts/n8n/n8n_keypair_body.py`.
 - `scripts/n8n/n8n_api.py` — cliente HTTP a la API de n8n. Lee el JWT desde
   `N8N_API_KEY` env, o `scripts/n8n/n8n.local.json`, o `N8N.local.txt` en
   la raíz / `rest-wrapper/`. **Ningún token hardcodeado en git.**
-- `n8n_keypair_body.py` — regenera los body-params como keypair + $fromAI opcional.
+- `n8n_keypair_body.py` — regenera los body-params como keypair + $fromAI
+  opcional. Fuente de verdad de qué campos expone cada tool al LLM
+  (CONTACT_FIELDS, ACCOUNT_FIELDS, OPP_FIELDS, EVENT_FIELDS, COMMENT_FIELDS).
+- `n8n_push_prompt.py` — sube `_sys_prompt_current.txt` al `systemMessage`
+  del AI Agent.
+- `_sys_prompt_current.txt` — fuente de verdad del prompt del agente.
+  Se versiona aquí y se pushea con el script anterior.
+- `n8n_add_f_account_id.py` — añadió el parámetro `f_account_id` a
+  `search_contacts` (para listar contactos de una azienda) e hizo `q`
+  opcional.
+- `n8n_export_workflow.py` — dump del workflow a
+  `rest-wrapper/n8n/vtiger-agent-demo.json` con el Bearer redactado.
+  Correrlo cada vez que el workflow quede estable para actualizar el snapshot.
 - `n8n_last_exec.py`, `n8n_exec_detail.py`, `n8n_exec_full.py` — depurar
   ejecuciones (muy útiles para ver qué argumentos pasó el LLM).
 - `n8n_dump_update_contact.py` — inspecciona un tool concreto.
-- `n8n_add_memory.py`, `n8n_switch_model.py`, `n8n_reorganize.py`,
-  `n8n_update_prompt.py` — utilidades aplicadas en sesiones anteriores.
+- `n8n_add_memory.py`, `n8n_switch_model.py`, `n8n_update_prompt.py` —
+  utilidades aplicadas en sesiones anteriores.
 
 Todos los scripts que mutan el workflow deben filtrar `settings` a las keys
 permitidas por la API (`ALLOWED_SETTINGS` en `n8n_keypair_body.py`), si no
 el PUT devuelve 400 "settings must NOT have additional properties".
 
+### Prompt del agente (`_sys_prompt_current.txt`) — reglas clave
+
+- **Picklist con doble vocabulario**: etiqueta UI (lo que ve el usuario
+  en la lengua que habla) ↔ valor DB (lo que se envía al tool). Mapping
+  obligatorio para `sales_stage`, `eventstatus`, `activitytype`. Para
+  `cf_969` (Regione) UI=DB. Ver sección 🎛️ PICKLIST del prompt.
+- **Valores reales de picklists** (sacados de la DB, no de defaults vTiger
+  — ver memoria `project_vtiger_picklists.md`):
+  - `sales_stage`: Prospecting, Lavoro in Corso, Closed Won, Closed Lost.
+  - `eventstatus`: Planned, Held, Not Held.
+  - `activitytype`: Call, Meeting, Mobile Call.
+  - `cf_969`: BASILICATA, PUGLIA, CALABRIA, SICILIA, CAMPANIA (solo 5;
+    Gorima opera solo en Sur de Italia).
+- **Input parcial** (bloque 🧩): el riepilogo es la interfaz principal.
+  Se muestra siempre, incluso vacío, con los obligatorios marcados.
+  El usuario rellena por turnos, el agente acumula, y solo llama al
+  tool tras un SÌ explícito. Correcciones pre-conferma se aplican solo
+  al campo afectado; 'annulla/scarta/lascia stare' aborta sin llamar tool.
+- **Placeholder `—`**: solo visual; NUNCA enviar al tool. Regla en el
+  wrapper (`stripPlaceholders`) como red de seguridad.
+
 ---
 
 ## 4. REST wrapper (rest-wrapper/api/index.php)
 
-- Parcheada la lógica de búsqueda (`list()`): soporte multi-token con AND,
-  variantes letra↔dígito, campos custom extra para Potentials
-  (cf_969/915/913/1009).
+- Búsqueda (`list()`): soporte multi-token con AND, variantes letra↔dígito,
+  campos custom extra para Potentials (cf_969/915/913/1009).
+- **Filtros por igualdad** `?f_<field>=<value>`: ej.
+  `/api/Contacts?f_account_id=11x3358` → contactos de esa azienda.
+  Se combinan con AND entre sí y con AND al bloque OR de `?q=` distribuyendo
+  los filtros en cada rama OR (VTQL no soporta parentesis).
+- **`filterDeleted()`**: post-filtro PDO contra `vtiger_crmentity.deleted=0`
+  — VTQL en este build no filtra siempre los soft-deleted, y un `retrieve`
+  posterior sobre un crmid borrado devuelve ACCESS_DENIED (502). Defensivo:
+  si el bloque `db` no está en `config.php` o la query falla, devuelve los
+  rows intactos.
+- **`stripPlaceholders()`**: red de seguridad. Si el LLM pasa valores tipo
+  `—`, `--`, `N/A`, `null`, o cadena vacía, se drop del array antes de
+  mandarlo al webservice. Evita que el cliente reviente por MANDATORY_FIELDS
+  cuando el agente confunde un campo vacío visual con un valor real.
 - `update()` usa operación `revise` del webservice nativo → update parcial.
 - Token se valida en `Authorization: Bearer` o `X-API-Token`.
+
+### config.php — bloque `db` nuevo
+
+Para que `filterDeleted()` funcione, `config.php` debe incluir:
+
+```php
+'db' => [
+    'host' => 'localhost',
+    'port' => 3306,
+    'name' => 'vtiger',
+    'user' => 'ravi',
+    'password' => '...',
+],
+```
+
+(Ver `config.php.example` para el template completo.)
 
 > El índex.php en el VPS puede tener un patch temporal de debug:
 > `@file_put_contents('/tmp/vt_body.log', … , FILE_APPEND);` dentro de
@@ -191,16 +252,17 @@ Reglas personales:
 
 ## 7. Pendientes
 
-- [ ] Probar `update_account`, `update_potential` con la nueva forma keypair.
-- [ ] Probar `create_*` y `add_comment_to_potential`.
+- [x] Probar `update_account`, `update_potential` con la forma keypair.
+- [x] Probar `create_*` y `add_comment_to_potential` end-to-end.
+- [x] Exportar workflow a `rest-wrapper/n8n/vtiger-agent-demo.json`
+      (con Bearer redactado por `n8n_export_workflow.py`).
+- [x] Picklists con valores reales de DB (no defaults vTiger genéricos).
+- [x] Flujo de input parcial con riepilogo vacío como plantilla.
 - [ ] Eliminar el patch de debug de `readJsonBody()` en el wrapper del VPS
       cuando el flujo esté 100% validado. Script:
       `scripts/ssh/ssh_fix_debug.py` hace el inverso fácilmente
       (subir versión limpia).
-- [ ] Exportar el workflow al JSON del repo (`rest-wrapper/n8n/vtiger-agent-demo.json`)
-      cuando quede estable.
-- [ ] Opcional: reestructurar description fields de Opportunities y decidir
-      enum de `sales_stage` visible en la UI (gerente pidió flujo coloquial).
+- [ ] Tests unitarios / smoke automatizados para el wrapper (hoy todo manual).
 
 ---
 
