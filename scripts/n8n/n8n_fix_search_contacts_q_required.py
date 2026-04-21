@@ -1,16 +1,17 @@
-"""Make `q` a REQUIRED parameter in search_contacts and drop f_account_id.
+"""Make `q` a REQUIRED parameter in search_contacts using the SIMPLE n8n form.
 
-Previous attempt: we added f_account_id and made q optional (4th $fromAI arg=''),
-so the LLM could list contacts of an azienda without keywords. Consequence:
-the LangChain zod schema marked q as optional and the LLM started calling
-search_contacts with query={} on plain name searches too, which returns the
-first N contacts unrelated to what was asked.
+Why the simple form: search_potentials and search_accounts both use
+`{"name": "q"}` with no valueProvider/value. This is the native
+toolHttpRequest convention — n8n auto-derives an AI-fillable, REQUIRED
+parameter from it. That form works in practice.
 
-Fix:
-- q: drop the 4th arg → required in the tool schema.
-- f_account_id: remove from query params (feature deferred; handled differently
-  in the create_event flow at the prompt level).
-- toolDescription updated accordingly.
+The earlier $fromAI-based form with explicit descriptions (even 3-arg,
+"should be required") did NOT force the LLM to fill q in query params;
+the tool kept being called with `query: {}`. Switching to the native
+form aligns search_contacts with the two sibling tools that work.
+
+The prompt/tool-description still carries the name-extraction guidance
+(e.g. "aggiorna Luca Ferrari" -> q='Luca Ferrari').
 """
 from n8n_api import req
 import sys, io, json
@@ -19,35 +20,26 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 WF_ID = "kwoD2OHZeWSMTdTC"
 code, d = req("GET", f"/workflows/{WF_ID}")
 
-q_desc = (
-    "Parole chiave di ricerca testuale (nome, cognome, email, telefono) "
-    "con cui cercare contatti nel CRM. Devi sempre estrarle dal messaggio "
-    "dell'utente (es: 'aggiorna contatto Luca Ferrari' -> q='Luca Ferrari'). "
-    "Non includere mai verbi conversazionali tipo 'cerca', 'trova'."
-)
-# 3 args → REQUIRED. This is the whole point of this patch.
-q_val = "={{ $fromAI('q', '" + q_desc.replace("'", "\\'") + "', 'string') }}"
-
 for n in d["nodes"]:
     if n.get("name") != "search_contacts":
         continue
     p = n["parameters"]
     qv = p.setdefault("parametersQuery", {}).setdefault("values", [])
-    # Strip previous q and f_account_id entries; keep limit/fields etc.
+    # Strip previous q entries (and any leftover f_account_id)
     qv = [v for v in qv if v.get("name") not in ("q", "f_account_id")]
-    qv.insert(0, {
-        "name": "q",
-        "valueProvider": "fieldValue",
-        "value": q_val,
-    })
+    # Native AI-fillable form: just a name, no value/valueProvider → required.
+    qv.insert(0, {"name": "q"})
     p["parametersQuery"]["values"] = qv
     p["toolDescription"] = (
-        "Cerca contatti (Contacts) nel CRM vTiger PER NOME/EMAIL/TELEFONO. "
-        "Parametro `q` OBBLIGATORIO: estrai sempre dal messaggio utente il "
-        "nome/cognome/azienda/email/telefono che serve a identificare il "
-        "contatto (es: 'Luca Ferrari'). La risposta include l'id '12xNNNN'."
+        "Cerca contatti (Contacts) nel CRM vTiger per parole chiave. "
+        "Il parametro `q` deve contenere nome, cognome, email o telefono "
+        "del contatto cercato. Estrai sempre queste keywords dal messaggio "
+        "utente (es: utente 'aggiorna contatto Luca Ferrari' -> q='Luca Ferrari'; "
+        "utente 'trova mario.rossi@gmail.com' -> q='mario.rossi@gmail.com'). "
+        "NON includere verbi conversazionali tipo 'cerca', 'trova', 'aggiorna'. "
+        "La risposta include l'id nel formato '12xNNNN'."
     )
-    print(f"  patched search_contacts: q required, f_account_id removed ({len(qv)} query params)")
+    print(f"  patched search_contacts: q as native required AI param ({len(qv)} query params)")
 
 ALLOWED = {"executionOrder","saveDataErrorExecution","saveDataSuccessExecution","saveExecutionProgress","saveManualExecutions","timezone","executionTimeout","errorWorkflow","callerPolicy"}
 if "settings" in d:
