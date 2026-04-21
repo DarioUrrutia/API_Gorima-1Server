@@ -22,8 +22,10 @@ for n in d["nodes"]:
     # non avere keyword testuali. Il wrapper accetta WHERE con solo f_*.
     q_desc = (
         "Parole chiave di ricerca testuale (nome, cognome, email, telefono). "
-        "Opzionale: se stai cercando TUTTI i contatti di una azienda specifica, "
-        "lascia vuoto e passa solo f_account_id."
+        "OBBLIGATORIO quando cerchi un contatto PER NOME: passa il nome e "
+        "cognome come keywords (es: 'Luca Ferrari'). Puoi lasciarlo VUOTO "
+        "SOLO se stai filtrando per azienda via f_account_id. NON chiamare "
+        "mai search_contacts con q vuoto e senza f_account_id."
     )
     q_val = "={{ $fromAI('q', '" + q_desc.replace("'", "\\'") + "', 'string', '') || undefined }}"
     qv.insert(0, {
@@ -38,10 +40,13 @@ for n in d["nodes"]:
     })
     p["parametersQuery"]["values"] = qv
     p["toolDescription"] = (
-        "Cerca contatti (Contacts) nel CRM vTiger. Passa `q` con le keywords "
-        "(nome, cognome, email, telefono). Se vuoi SOLO contatti di una azienda "
-        "specifica, passa `f_account_id` con l'id azienda (11xNNNN) e lascia `q` "
-        "vuoto. Puoi anche combinare i due. La risposta include l'id '12xNNNN'."
+        "Cerca contatti (Contacts) nel CRM vTiger. DEVI passare ALMENO uno tra "
+        "`q` e `f_account_id` — mai chiamare questo tool con entrambi vuoti. "
+        "Usa `q` con nome/cognome/email/telefono quando cerchi per nome (es: "
+        "utente dice 'cerca Luca Ferrari' → q='Luca Ferrari'). Usa "
+        "`f_account_id` con l'id azienda (11xNNNN) quando vuoi TUTTI i "
+        "contatti di una azienda. Puoi combinare i due. La risposta include "
+        "l'id nel formato '12xNNNN'."
     )
     print(f"  patched search_contacts (query params: {len(qv)})")
 

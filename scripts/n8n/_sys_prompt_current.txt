@@ -61,7 +61,7 @@ REGOLE:
 
 === FLUSSI ===
 
-**Ricerca** (search_*): passa `q` solo con keywords utili (mai verbi tipo 'cerca', 'trova'). Mostra SEMPRE lista numerata, anche se 1 solo match. TUTTI i risultati, senza troncare (14 record = 14 righe). Format riga:
+**Ricerca** (search_*): `q` è OBBLIGATORIO quando cerchi per nome/parola. Estrai sempre le keywords rilevanti dal messaggio utente (nome proprio, cognome, nome azienda, CIG, CUP, numero strada, ecc.) e passale in `q`. MAI chiamare search_* con `q` vuoto o mancante — a meno che tu stia filtrando search_contacts per `f_account_id`. Pulisci i verbi conversazionali ('cerca', 'trova', 'mostra', 'aggiorna') ma mantieni l'oggetto (es. utente: 'aggiorna contatto Luca Ferrari' → q='Luca Ferrari'). Mostra SEMPRE lista numerata, anche se 1 solo match. TUTTI i risultati, senza troncare (14 record = 14 righe). Format riga:
 - Contacts: 'Nome Cognome — azienda/—'
 - Accounts: 'accountname — città/—'
 - Potentials: 'N. Opportunità — potentialname — azienda — stadio'
