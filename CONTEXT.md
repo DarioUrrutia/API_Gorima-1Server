@@ -204,7 +204,84 @@ Reglas personales:
 
 ---
 
-## 8. Arranque rápido para la próxima sesión
+## 8. Diseño v2 — Multi-usuario sobre Teams (ticket abierto)
+
+Idea: publicar el agente como **app de Microsoft Teams** para que cualquier
+empleado lo use. El piloto actual con Bearer compartido **no sirve** tal cual
+para eso. Problemas a resolver antes de abrirlo:
+
+### 8.1 Identidad — el problema central
+
+Hoy todas las acciones van al wrapper con el mismo token → vTiger las
+registra como `assigned_user_id = 19x5` (Jean). Si 10 personas usan el
+chatbot, vTiger no distingue quién creó/modificó qué. Auditoría rota.
+
+**Lo que hay que conseguir**: que cada llamada al wrapper lleve la
+identidad del usuario de Teams, y que el webservice de vTiger ejecute la
+operación **como ese usuario** (o al menos la registre a su nombre en
+`created_by` / `modified_by`).
+
+### 8.2 Opciones de autenticación (de menos a más segura)
+
+1. **Token por usuario** (rápido, razonable para empezar)
+   - Cada empleado tiene su propio token en `config.php` (array `api_tokens`).
+   - El wrapper mapea `token → vtiger_username` y hace login en el
+     webservice con ese user cada request.
+   - Coste: mantener la lista sincronizada con altas/bajas.
+
+2. **SSO Entra ID + mapping** (lo correcto para Teams corporativo)
+   - La app de Teams pasa al backend el `id_token` OAuth del usuario.
+   - El wrapper valida el JWT contra el tenant y extrae `email`.
+   - Tabla `email → vtiger_username` determina con qué user llama al webservice.
+   - Ventaja: cero secretos por usuario, revocación inmediata al salir
+     de la empresa.
+
+3. **Delegated access vTiger nativo** (más complejo)
+   - Cada usuario genera su `accessKey` en su perfil vTiger y lo guarda
+     una sola vez en la app.
+   - Ventaja: vTiger ya tiene permisos por módulo/campo → los respetamos
+     sin reimplementarlos.
+
+Recomendación: ir por **1 → 2**. Paso 1 desbloquea el piloto en Teams con
+trazabilidad; paso 2 lo hace sostenible.
+
+### 8.3 Cambios que implica en cada pieza
+
+- **rest-wrapper (`api/index.php`)**
+  - Aceptar `X-Actor-Email` (o resolverlo del JWT SSO).
+  - Hacer `getchallenge` + login al webservice con el `vtiger_username`
+    correspondiente antes de cada operación (hoy hardcodea `Jean`).
+  - Registrar en un log simple: timestamp, actor_email, módulo, método, id afectado.
+  - Opcional: check de permisos (p.ej. solo managers pueden borrar).
+
+- **n8n**
+  - El trigger pasa a ser **Microsoft Teams** (nodo nativo) en vez del
+    chat web. El `sessionId` se vincula al `conversationId` de Teams y el
+    `userEmail` al `from.aadObjectId` / email del usuario de Teams.
+  - Los tools añaden cabecera `X-Actor-Email: {{ $json.userEmail }}`.
+  - Memory pasa a ser *por usuario* (scope del sessionId).
+
+- **Infra**
+  - HTTPS obligatorio en el wrapper (hoy es HTTP por IP). Con TLS propio
+    o detrás de Cloudflare Tunnel.
+  - Rate limiting básico para evitar bucles del agente.
+
+### 8.4 Cosas que NO hay que tocar
+
+- La forma keypair + `$fromAI(...,'')||undefined` de los tools (ya validada).
+- El wrapper como abstracción: `/api/{Module}/{id}` se mantiene.
+- `CONTEXT.md` como documento vivo.
+
+### 8.5 Siguiente paso tangible
+
+Cuando haya luz verde para empezar v2: extender el wrapper para aceptar
+`X-Actor-Email` y loggear al actor. Mientras no esté la integración Teams,
+n8n puede seguir mandando `X-Actor-Email: jean@...` → probamos la
+trazabilidad sin bloquear el piloto.
+
+---
+
+## 9. Arranque rápido para la próxima sesión
 
 1. Leer este archivo completo.
 2. `git log --oneline -10` para ver últimos commits.
