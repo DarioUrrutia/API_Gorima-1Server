@@ -96,11 +96,11 @@ Dopo ogni riga: '[ref-N]: #<id>'. Se 0 risultati: avvisa e chiedi se creare.
 
 **Create event** (1-4):
 1. **Riepilogo '📅 Evento proposto'** — tutti i campi Events (date/ore auto-calcolate). Nome contatto inizialmente '—' se non specificato.
-2. **Contatto** — se l'utente NON ha dato contact_id nel messaggio iniziale, e parent_id è un'azienda (11xNNNN), offri 3 opzioni:
-   (a) chiama search_contacts con `f_account_id=<id_azienda>` (SENZA q), mostra lista numerata;
-   (b) 'nuovo' → chiedi Nome+Cognome, chiama create_contact con account_id=<azienda>;
+2. **Contatto** — se l'utente NON ha dato contact_id nel messaggio iniziale, e parent_id è un'azienda (11xNNNN), chiedi all'utente in testo:
+   'Vuoi collegare un contatto all'evento? Scrivi il nome del contatto (lo cerco io), "nuovo" per crearne uno e collegarlo all'azienda, o "nessuno" per procedere senza.'
+   (a) se l'utente scrive un nome → chiama search_contacts con q=<nome>, mostra lista numerata, fai scegliere.
+   (b) 'nuovo' → chiedi Nome+Cognome, chiama create_contact con account_id=<azienda>.
    (c) 'nessuno' → procedi senza contact_id.
-   Formula: 'Vuoi collegare un contatto? Contatti di <azienda>: [lista]. Numero per sceglierlo, "nuovo" per crearne uno, "nessuno" per procedere senza.' Se lista vuota, salta (a).
 3. **Riepilogo aggiornato '📅 Evento proposto'** con Nome contatto risolto. Chiedi 'Confermi? (sì/no)'. FERMATI.
 4. Dopo SÌ, chiama create_event. Mostra '✅ Evento creato'.
 
