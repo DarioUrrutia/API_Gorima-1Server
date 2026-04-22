@@ -99,6 +99,42 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
   o cadenas vacías antes de enviar a `create/revise`. Evita que un LLM que
   confunde un campo vacío visual con un valor real rompa campos obligatorios.
 
+### Garantías de validación (deploy 2026-04-22)
+
+El wrapper no es un passthrough ciego: defiende ante LLMs que ignoran
+las reglas del prompt.
+
+- **Picklist whitelist** — `create`/`update` rechazan con HTTP `400`
+  + `error: "picklist_invalid"` los valores fuera de whitelist para
+  `Potentials.sales_stage`, `Potentials.cf_969`, `Events.eventstatus`,
+  `Events.activitytype` (igual `Calendar.*`). El body incluye
+  `details.allowed: [...]` con la lista DB válida — el agent debe
+  traducirla a etiquetas UI y pedir al user que escoja.
+- **404 cuando un id no existe** — `GET /Module/{id}` con un id
+  inexistente o eliminado devuelve `404 not_found` (antes era `502`
+  opaco). Permite al agent distinguir "id inventado" de "wrapper caído".
+- **Eventos `parent_id` / `contact_id` reales** — para `Events`/`Calendar`,
+  después de `create`/`retrieve` el wrapper consulta
+  `vtiger_seactivityrel` y `vtiger_cntactivityrel` y rellena esos
+  campos en la respuesta. Sin esto vTiger los devolvía vacíos aunque
+  el enlace estuviera guardado, confundiendo al agent.
+
+### Smoke tests post-deploy
+
+`scripts/ssh/ssh_deploy_v2.py` despliega el wrapper y corre 8 smoke
+tests vía `curl` desde el propio VPS:
+
+1. picklist `sales_stage` inválido → `400`
+2. picklist `cf_969` inválido → `400`
+3. id inexistente → `404`
+4. `GET` evento existente → `parent_id` real desde rel table
+5. `POST` evento con `parent_id` → respuesta refleja `parent_id` real
+6. picklist `activitytype` inválido → `400`
+7. regression — `search_contacts?q=Luca Ferrari` → 1 hit
+8. regression — `POST` Potential válido → record creado con valores DB
+
+Cualquier cambio al wrapper debe pasar estos 8 antes de mergear.
+
 ## Agent de n8n (`/n8n/vtiger-agent-demo.json`)
 
 Snapshot del workflow importable en otra instancia de n8n:

@@ -108,6 +108,29 @@ function route(string $method, array $seg, VtigerClient $vt, array $config): arr
 
 class VtigerClient
 {
+    /**
+     * Whitelist canonica de valori per i picklist gestiti dall'agente AI.
+     * Usiamo i valori RAW del DB (non le etichette UI tradotte). Se l'agente
+     * passa qualcosa fuori da questa lista, lo rifiutiamo con 400 invece di
+     * lasciare che vTiger accetti silenziosamente un valore inventato e lo
+     * salvi (visto in EXEC 525-533: utente diceva "negoziazione avanzata"
+     * e l'LLM passava "Lavoro in Corso" senza chiedere conferma).
+     */
+    private const PICKLIST_WHITELIST = [
+        'Potentials' => [
+            'sales_stage' => ['Prospecting', 'Lavoro in Corso', 'Closed Won', 'Closed Lost'],
+            'cf_969'      => ['BASILICATA', 'PUGLIA', 'CALABRIA', 'SICILIA', 'CAMPANIA'],
+        ],
+        'Events' => [
+            'eventstatus'  => ['Planned', 'Held', 'Not Held'],
+            'activitytype' => ['Call', 'Meeting', 'Mobile Call'],
+        ],
+        'Calendar' => [
+            'eventstatus'  => ['Planned', 'Held', 'Not Held'],
+            'activitytype' => ['Call', 'Meeting', 'Mobile Call'],
+        ],
+    ];
+
     private string $url;
     private string $user;
     private string $accessKey;
@@ -128,6 +151,111 @@ class VtigerClient
     }
 
     /**
+     * Lazily opens (and caches) a PDO handle to vTiger's DB.
+     * Returns null si db non e' configurato o la connessione fallisce.
+     */
+    private function ensurePdo(): ?\PDO
+    {
+        if ($this->pdo !== null) return $this->pdo;
+        if (!$this->dbConfig) return null;
+        try {
+            $db = $this->dbConfig;
+            $dsn = "mysql:host={$db['host']};port=" . ($db['port'] ?? 3306) . ";dbname={$db['name']};charset=utf8mb4";
+            $this->pdo = new \PDO($dsn, $db['user'], $db['password'], [
+                \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
+                \PDO::ATTR_TIMEOUT => 3,
+            ]);
+            return $this->pdo;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Convierte un crmid numerico al webservice id "<prefix>x<crmid>" leyendo
+     * el setype desde vtiger_crmentity. Se usa para resolver enlaces guardados
+     * en tablas relacionales (ej. vtiger_seactivityrel.crmid) que el wrapper
+     * necesita exponer al agent en formato wsId.
+     */
+    private function crmIdToWsId(int $crmid): ?string
+    {
+        $pdo = $this->ensurePdo();
+        if (!$pdo || $crmid <= 0) return null;
+        try {
+            $stmt = $pdo->prepare("SELECT setype FROM vtiger_crmentity WHERE crmid=? AND deleted=0");
+            $stmt->execute([$crmid]);
+            $setype = $stmt->fetchColumn();
+            if (!$setype) return null;
+            $prefix = $this->modulePrefix((string)$setype);
+            return $prefix === '' ? null : ($prefix . 'x' . $crmid);
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Para Events/Calendar, vTiger guarda parent_id en vtiger_seactivityrel y
+     * contact_id en vtiger_cntactivityrel — pero el `retrieve` y la respuesta
+     * de `create` los devuelven vacios en el record principal. Resultado:
+     * el agent piensa "evento creado pero no vinculado" cuando en realidad
+     * el enlace si existe. Aqui rellenamos esos campos desde las tablas
+     * relacionales para que la respuesta refleje el estado real en DB.
+     */
+    private function fillEventRelations(array $event): array
+    {
+        if (empty($event['id'])) return $event;
+        $rawId = (string)$event['id'];
+        $num = strpos($rawId, 'x') !== false ? (int)explode('x', $rawId, 2)[1] : (int)$rawId;
+        if ($num <= 0) return $event;
+        $pdo = $this->ensurePdo();
+        if (!$pdo) return $event;
+        try {
+            $stmt = $pdo->prepare("SELECT crmid FROM vtiger_seactivityrel WHERE activityid=? LIMIT 1");
+            $stmt->execute([$num]);
+            $parentCrm = (int)$stmt->fetchColumn();
+            if ($parentCrm > 0) {
+                $ws = $this->crmIdToWsId($parentCrm);
+                if ($ws) $event['parent_id'] = $ws;
+            }
+            $stmt = $pdo->prepare("SELECT contactid FROM vtiger_cntactivityrel WHERE activityid=? LIMIT 1");
+            $stmt->execute([$num]);
+            $contactCrm = (int)$stmt->fetchColumn();
+            if ($contactCrm > 0) {
+                $ws = $this->crmIdToWsId($contactCrm);
+                if ($ws) $event['contact_id'] = $ws;
+            }
+        } catch (\Throwable $e) {
+            // silencioso: si DB falla, devolvemos el event tal cual
+        }
+        return $event;
+    }
+
+    /**
+     * Rifiuta valori non-canonici per i picklist gestiti dall'agente.
+     * Vedi PICKLIST_WHITELIST per il razionale completo.
+     */
+    private function validatePicklists(string $module, array $data): void
+    {
+        $rules = self::PICKLIST_WHITELIST[$module] ?? null;
+        if (!$rules) return;
+        foreach ($rules as $field => $allowed) {
+            if (!array_key_exists($field, $data)) continue;
+            $val = $data[$field];
+            if (!is_string($val)) continue;
+            $val = trim($val);
+            if ($val === '') continue;
+            if (!in_array($val, $allowed, true)) {
+                throw new ApiException(
+                    'picklist_invalid',
+                    "Valore '$val' non valido per il campo '$field' nel modulo $module. Valori accettati: " . implode(', ', $allowed),
+                    400,
+                    ['field' => $field, 'value' => $val, 'allowed' => $allowed]
+                );
+            }
+        }
+    }
+
+    /**
      * Removes soft-deleted records (vtiger_crmentity.deleted=1) from a listRecords result.
      * VTQL in this vTiger build does not always auto-filter deleted rows, and a subsequent
      * retrieve on a deleted crmid returns ACCESS_DENIED (502). We strip them upstream so
@@ -136,7 +264,9 @@ class VtigerClient
      */
     private function filterDeleted(array $rows): array
     {
-        if (!$rows || !$this->dbConfig) return $rows;
+        if (!$rows) return $rows;
+        $pdo = $this->ensurePdo();
+        if (!$pdo) return $rows;
         $ids = [];
         foreach ($rows as $r) {
             $raw = $r['id'] ?? '';
@@ -150,17 +280,9 @@ class VtigerClient
         }
         if (!$ids) return $rows;
         try {
-            if ($this->pdo === null) {
-                $db = $this->dbConfig;
-                $dsn = "mysql:host={$db['host']};port=" . ($db['port'] ?? 3306) . ";dbname={$db['name']};charset=utf8mb4";
-                $this->pdo = new \PDO($dsn, $db['user'], $db['password'], [
-                    \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
-                    \PDO::ATTR_TIMEOUT => 3,
-                ]);
-            }
             $idList = array_keys($ids);
             $place = implode(',', array_fill(0, count($idList), '?'));
-            $stmt = $this->pdo->prepare("SELECT crmid FROM vtiger_crmentity WHERE crmid IN ($place) AND deleted=0");
+            $stmt = $pdo->prepare("SELECT crmid FROM vtiger_crmentity WHERE crmid IN ($place) AND deleted=0");
             $stmt->execute($idList);
             $alive = array_flip(array_map('intval', $stmt->fetchAll(\PDO::FETCH_COLUMN)));
             return array_values(array_filter($rows, function ($r) use ($alive) {
@@ -223,7 +345,37 @@ class VtigerClient
     {
         $this->login();
         $wsId = $this->toWsId($module, $id);
-        return $this->wsGet(['operation' => 'retrieve', 'sessionName' => $this->sessionName, 'id' => $wsId]);
+        try {
+            $rec = $this->wsGet(['operation' => 'retrieve', 'sessionName' => $this->sessionName, 'id' => $wsId]);
+        } catch (ApiException $e) {
+            // vTiger devuelve ACCESS_DENIED / INVALID_ID_FORMAT / etc. cuando
+            // el record no existe o esta soft-deleted. Convertimos a 404 para
+            // que el agent lo distinga de un fallo real de gateway (502) y
+            // pueda decir al user "no esiste, vuoi cercarlo per nome?" en
+            // vez de "Request failed with status code 502" (visto en EXEC
+            // 545/548 cuando l'LLM aveva inventato un id).
+            $msg = strtolower($e->getMessage());
+            $vtCode = strtoupper((string)($e->details['error']['code'] ?? ''));
+            $notFoundCodes = ['ACCESS_DENIED', 'INVALID_ID', 'INVALID_RECORD', 'RECORD_NOT_FOUND', 'INVALID_ID_FORMAT'];
+            $looksMissing = in_array($vtCode, $notFoundCodes, true)
+                || str_contains($msg, 'permission')
+                || str_contains($msg, 'no record')
+                || str_contains($msg, 'access')
+                || str_contains($msg, 'not exist');
+            if ($e->httpStatus === 502 && $looksMissing) {
+                throw new ApiException(
+                    'not_found',
+                    "Il record $wsId non esiste in $module (o non e' accessibile / e' stato eliminato).",
+                    404,
+                    ['id' => $wsId, 'module' => $module, 'vtiger_error' => $vtCode ?: null]
+                );
+            }
+            throw $e;
+        }
+        if (in_array($module, ['Events', 'Calendar'], true) && is_array($rec)) {
+            $rec = $this->fillEventRelations($rec);
+        }
+        return $rec;
     }
 
     public function listRecords(string $module, array $query): array
@@ -421,24 +573,37 @@ class VtigerClient
     {
         $this->login();
         $data = $this->stripPlaceholders($data);
-        return $this->wsPost([
+        $this->validatePicklists($module, $data);
+        $created = $this->wsPost([
             'operation'   => 'create',
             'sessionName' => $this->sessionName,
             'elementType' => $module,
             'element'     => json_encode($data),
         ]);
+        // Para Events/Calendar la respuesta del create no refleja parent_id /
+        // contact_id (vTiger los lee de la tabla equivocada). Rellenamos
+        // desde las tablas relacionales para que el agent vea el dato real.
+        if (in_array($module, ['Events', 'Calendar'], true) && is_array($created)) {
+            $created = $this->fillEventRelations($created);
+        }
+        return $created;
     }
 
     public function update(string $module, string $id, array $data): array
     {
         $this->login();
         $data = $this->stripPlaceholders($data);
+        $this->validatePicklists($module, $data);
         $data['id'] = $this->toWsId($module, $id);
-        return $this->wsPost([
+        $updated = $this->wsPost([
             'operation'   => 'revise',
             'sessionName' => $this->sessionName,
             'element'     => json_encode($data),
         ]);
+        if (in_array($module, ['Events', 'Calendar'], true) && is_array($updated)) {
+            $updated = $this->fillEventRelations($updated);
+        }
+        return $updated;
     }
 
     public function delete(string $module, string $id): array
@@ -549,8 +714,11 @@ function extractBearer(): ?string
 
 function readJsonBody(): array
 {
+    global $CONFIG;
     $raw = file_get_contents('php://input');
-    @file_put_contents('/tmp/vt_body.log', date('H:i:s').' '.($_SERVER['REQUEST_METHOD']??'?').' '.($_SERVER['REQUEST_URI']??'?').' body='.$raw."\n", FILE_APPEND);
+    if (!empty($CONFIG['debug'])) {
+        @file_put_contents('/tmp/vt_body.log', date('H:i:s').' '.($_SERVER['REQUEST_METHOD']??'?').' '.($_SERVER['REQUEST_URI']??'?').' body='.$raw."\n", FILE_APPEND);
+    }
     if ($raw === false || $raw === '') return [];
     $data = json_decode($raw, true);
     if (!is_array($data)) throw new ApiException('invalid_json', 'Body no es JSON valido', 400);

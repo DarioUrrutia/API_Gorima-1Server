@@ -262,14 +262,37 @@ Reglas personales:
       `a6243df`) — el `$fromAI(...,'string','')` con default hacía q
       opcional y el LLM lo omitía. Feature `f_account_id` retirada del
       tool; el flujo de create_event ahora pregunta al usuario en texto.
-- [ ] Eliminar el patch de debug de `readJsonBody()` en el wrapper del VPS
-      cuando el flujo esté 100% validado. Script:
-      `scripts/ssh/ssh_fix_debug.py` hace el inverso fácilmente
-      (subir versión limpia).
-- [ ] Re-exportar el workflow snapshot con
-      `python scripts/n8n/n8n_export_workflow.py` antes de cerrar la
-      semana (refleja los últimos cambios en search_contacts y prompt).
-- [ ] Tests unitarios / smoke automatizados para el wrapper (hoy todo manual).
+- [x] **Wrapper hardening (2026-04-22)** — tres fixes en el mismo deploy
+      tras diagnóstico de 30 ejecuciones de ayer:
+      1. **Validación de picklists** en `create()`/`update()` para
+         `sales_stage`/`cf_969`/`eventstatus`/`activitytype`. Si el LLM
+         pasa un valor fuera de whitelist el wrapper responde 400 con
+         `error: picklist_invalid` y `details.allowed: [...]`. Antes
+         vTiger lo aceptaba en silencio (visto en EXEC 525-533).
+      2. **404 en lugar de 502** cuando un id no existe. Antes el
+         agent mostraba "Request failed with status code 502" y el
+         user no entendía nada (EXEC 545, 548).
+      3. **`fillEventRelations()`**: para `Events`/`Calendar`, después
+         de `create`/`retrieve` rellenamos `parent_id` y `contact_id`
+         leyendo `vtiger_seactivityrel` y `vtiger_cntactivityrel`
+         (vTiger los devuelve vacíos en el record principal aunque
+         estén en las tablas relacionales). Diagnóstico de EXEC 555:
+         el evento de Medil SÍ se vinculó, pero el agent envió un id
+         inventado `11x992` que en realidad es un `ModComments`
+         (crmid=992 setype=ModComments), no Medil (que es 11x918).
+      4. Prompt reforzado con regla `🚫 MAI inventare un id` y nueva
+         sección `=== GESTIONE ERRORI DEL WRAPPER ===` (404, 400
+         picklist_invalid, 502, etc.).
+      5. `readJsonBody()` debug ahora opt-in via `config.debug=true`.
+- [x] **Re-export del workflow snapshot** con `n8n_export_workflow.py`
+      reflejando el prompt actualizado.
+- [ ] Tests unitarios / smoke automatizados — hoy hay
+      `scripts/ssh/ssh_deploy_v2.py` con 8 smoke tests post-deploy
+      (picklist invalido x2, 404, parent_id real x2, regression Luca
+      Ferrari, regression create potential válido). Falta convertirlo
+      en una suite reproducible que cubra TODOS los tools y se corra
+      antes de cada cambio para detectar regresiones (este fue el
+      problema de "fix one, break another" que el user reportó).
 
 ---
 
