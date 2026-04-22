@@ -356,12 +356,20 @@ class VtigerClient
             // 545/548 cuando l'LLM aveva inventato un id).
             $msg = strtolower($e->getMessage());
             $vtCode = strtoupper((string)($e->details['error']['code'] ?? ''));
-            $notFoundCodes = ['ACCESS_DENIED', 'INVALID_ID', 'INVALID_RECORD', 'RECORD_NOT_FOUND', 'INVALID_ID_FORMAT'];
-            $looksMissing = in_array($vtCode, $notFoundCodes, true)
+            // Cualquier code de vTiger que empieza con INVALID_ o contiene
+            // NOT_FOUND / ACCESS_DENIED indica "id no localizable en este
+            // modulo". Esto cubre p.ej. INVALID_ID_ATTRIBUTE (cuando el
+            // prefijo wsId no coincide con el setype real del crmid: visto
+            // con `12x102` que existe pero como ModComments, no Contacts).
+            $looksMissing = strpos($vtCode, 'INVALID_') === 0
+                || str_contains($vtCode, 'NOT_FOUND')
+                || str_contains($vtCode, 'ACCESS_DENIED')
                 || str_contains($msg, 'permission')
                 || str_contains($msg, 'no record')
                 || str_contains($msg, 'access')
-                || str_contains($msg, 'not exist');
+                || str_contains($msg, 'not exist')
+                || str_contains($msg, 'id specified is incorrect')
+                || str_contains($msg, 'incorrect');
             if ($e->httpStatus === 502 && $looksMissing) {
                 throw new ApiException(
                     'not_found',

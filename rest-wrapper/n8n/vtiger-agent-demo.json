@@ -88,6 +88,13 @@
         },
         "placeholderDefinitions": {
           "values": []
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
         }
       },
       "id": "01f2ba58-c116-45fb-bca0-a1f2e323d56d",
@@ -141,7 +148,14 @@
             }
           ]
         },
-        "specifyBody": "keypair"
+        "specifyBody": "keypair",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
       },
       "id": "4c7314a2-69bf-4819-970e-7855fa8b9fd4",
       "name": "add_comment_to_potential",
@@ -191,6 +205,13 @@
         },
         "placeholderDefinitions": {
           "values": []
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
         }
       },
       "id": "tool-search-accounts",
@@ -274,7 +295,14 @@
         "placeholderDefinitions": {
           "values": []
         },
-        "specifyBody": "keypair"
+        "specifyBody": "keypair",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
       },
       "id": "tool-create-account",
       "name": "create_account",
@@ -349,7 +377,14 @@
         "placeholderDefinitions": {
           "values": []
         },
-        "specifyBody": "keypair"
+        "specifyBody": "keypair",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
       },
       "id": "tool-create-contact",
       "name": "create_contact",
@@ -452,7 +487,14 @@
         "placeholderDefinitions": {
           "values": []
         },
-        "specifyBody": "keypair"
+        "specifyBody": "keypair",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
       },
       "id": "tool-create-potential",
       "name": "create_potential",
@@ -561,7 +603,14 @@
             }
           ]
         },
-        "specifyBody": "keypair"
+        "specifyBody": "keypair",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
       },
       "id": "tool-update-potential",
       "name": "update_potential",
@@ -648,7 +697,14 @@
         "placeholderDefinitions": {
           "values": []
         },
-        "specifyBody": "keypair"
+        "specifyBody": "keypair",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
       },
       "id": "tool-create-event",
       "name": "create_event",
@@ -698,6 +754,13 @@
         },
         "placeholderDefinitions": {
           "values": []
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
         }
       },
       "id": "tool-search-contacts",
@@ -787,7 +850,14 @@
             }
           ]
         },
-        "specifyBody": "keypair"
+        "specifyBody": "keypair",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
       },
       "id": "tool-update-account",
       "name": "update_account",
@@ -868,7 +938,14 @@
             }
           ]
         },
-        "specifyBody": "keypair"
+        "specifyBody": "keypair",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
       },
       "id": "tool-update-contact",
       "name": "update_contact",
@@ -919,6 +996,13 @@
               "type": "string"
             }
           ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
         }
       },
       "id": "tool-get-contact",
@@ -957,6 +1041,13 @@
               "type": "string"
             }
           ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
         }
       },
       "id": "tool-get-account",
@@ -995,6 +1086,13 @@
               "type": "string"
             }
           ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
         }
       },
       "id": "tool-get-potential",

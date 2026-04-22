@@ -4,7 +4,7 @@
 > para retomar sin perder el hilo. Si el usuario me dice "lee el contexto",
 > empiezo por este archivo y por `scripts/n8n/n8n_api.py`.
 
-Última actualización: 2026-04-21
+Última actualización: 2026-04-22
 
 ---
 
@@ -284,6 +284,22 @@ Reglas personales:
          sección `=== GESTIONE ERRORI DEL WRAPPER ===` (404, 400
          picklist_invalid, 502, etc.).
       5. `readJsonBody()` debug ahora opt-in via `config.debug=true`.
+      6. **`INVALID_ID_ATTRIBUTE` también mapea a 404** (EXEC 560: el
+         agent llamó `get_contact 12x102` después de un search que ya
+         había devuelto `12x3357`; vTiger respondía
+         `INVALID_ID_ATTRIBUTE` porque crmid 102 existe pero como
+         `ModComments`, no `Contacts`. Antes la condición exacta
+         `INVALID_ID_FORMAT` no lo cubría → 502 opaco. Ahora la
+         heurística usa `strpos($vtCode,'INVALID_')===0` + matches de
+         mensaje "incorrect" / "id specified is incorrect").
+- [x] **n8n HTTP tool nodes con `neverError=true`**
+      (`scripts/n8n/n8n_set_never_error.py`) en los 14 nodos
+      toolHttpRequest. Sin esto n8n reemplazaba el body 4xx/5xx con un
+      genérico "Request failed with status code XXX" y el agent no veía
+      el JSON del wrapper (`{"error":"not_found",...}` o
+      `{"error":"picklist_invalid", "details":{"allowed":[...]}}`).
+      Ahora el agent recibe el body real y puede actuar
+      inteligentemente (pedir aclaración, mostrar valores válidos).
 - [x] **Re-export del workflow snapshot** con `n8n_export_workflow.py`
       reflejando el prompt actualizado.
 - [ ] Tests unitarios / smoke automatizados — hoy hay
