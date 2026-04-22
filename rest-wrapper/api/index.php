@@ -48,7 +48,8 @@ $segments = $path === '' ? [] : explode('/', $path);
 
 try {
     $vt = new VtigerClient($CONFIG);
-    $response = route($method, $segments, $vt, $CONFIG);
+    $guard = new SessionGuard(extractSessionId(), $CONFIG);
+    $response = route($method, $segments, $vt, $CONFIG, $guard);
     respond(200, $response);
 } catch (ApiException $e) {
     respond($e->httpStatus, ['error' => $e->errorCode, 'message' => $e->getMessage(), 'details' => $e->details]);
@@ -60,7 +61,7 @@ try {
 
 // ───────────────────────── router ─────────────────────────
 
-function route(string $method, array $seg, VtigerClient $vt, array $config): array
+function route(string $method, array $seg, VtigerClient $vt, array $config, SessionGuard $guard): array
 {
     if (count($seg) === 0) {
         return ['ok' => true, 'service' => 'vtiger-rest-wrapper', 'version' => '1.0.0'];
@@ -73,8 +74,16 @@ function route(string $method, array $seg, VtigerClient $vt, array $config): arr
 
     // /{Module}
     if (count($seg) === 1) {
-        if ($method === 'GET')  return $vt->listRecords($module, $_GET);
-        if ($method === 'POST') return $vt->create($module, readJsonBody());
+        if ($method === 'GET') {
+            $res = $vt->listRecords($module, $_GET);
+            $guard->recordList($res['items'] ?? []);
+            return $res;
+        }
+        if ($method === 'POST') {
+            $res = $vt->create($module, readJsonBody());
+            $guard->recordSingle($res);
+            return $res;
+        }
         throw new ApiException('method_not_allowed', "Metodo $method no soportado en /$module", 405);
     }
 
@@ -86,15 +95,27 @@ function route(string $method, array $seg, VtigerClient $vt, array $config): arr
     // /{Module}/{id}
     if (count($seg) === 2) {
         $id = $seg[1];
-        if ($method === 'GET')    return $vt->retrieve($module, $id);
-        if ($method === 'PUT')    return $vt->update($module, $id, readJsonBody());
-        if ($method === 'DELETE') return $vt->delete($module, $id);
+        if ($method === 'GET') {
+            $guard->assertKnown($module, $id);
+            $res = $vt->retrieve($module, $id);
+            $guard->recordSingle($res);
+            return $res;
+        }
+        if ($method === 'PUT') {
+            $guard->assertKnown($module, $id);
+            return $vt->update($module, $id, readJsonBody());
+        }
+        if ($method === 'DELETE') {
+            $guard->assertKnown($module, $id);
+            return $vt->delete($module, $id);
+        }
         throw new ApiException('method_not_allowed', "Metodo $method no soportado en /$module/$id", 405);
     }
 
     // /{Module}/{id}/comments
     if (count($seg) === 3 && $seg[2] === 'comments' && $method === 'POST') {
         $id = $seg[1];
+        $guard->assertKnown($module, $id);
         $body = readJsonBody();
         $text = trim((string)($body['content'] ?? $body['commentcontent'] ?? ''));
         if ($text === '') throw new ApiException('bad_request', "Falta campo 'content' con el texto del comentario", 400);
@@ -718,6 +739,136 @@ function extractBearer(): ?string
     if (is_string($x) && $x !== '') return trim($x);
 
     return null;
+}
+
+/**
+ * Extrae el session id que el cliente (n8n) manda en `X-Session-Id`.
+ * Si no viene, devuelve null y el SessionGuard se desactiva — necesario
+ * para curl, scripts de smoke test y compatibilidad con clientes que no
+ * mantienen sesion conversacional.
+ */
+function extractSessionId(): ?string
+{
+    $hdrs = function_exists('getallheaders') ? getallheaders() : [];
+    $h = $hdrs['X-Session-Id'] ?? $hdrs['x-session-id']
+        ?? ($_SERVER['HTTP_X_SESSION_ID'] ?? '');
+    if (!is_string($h)) return null;
+    $h = trim($h);
+    return $h === '' ? null : $h;
+}
+
+/**
+ * Guard contra IDs alucinados por el LLM.
+ *
+ * Problema observado (EXEC 562): el agent recibe una respuesta de
+ * search_contacts con id=12x3357, pasa al siguiente turno, el usuario
+ * dice "ACTUALIZAR", y el agent llama get_contact con id=12x9
+ * (totalmente inventado). El prompt no es defensa suficiente.
+ *
+ * Esta clase guarda en /tmp/wrapper_sessions/<sha1(sessionId)>.json los
+ * wsIds que el wrapper devuelve por esa sesion (resultados de search_*,
+ * retrieve y create) con TTL 10min. Cualquier retrieve/update/delete/
+ * addComment cuyo id no este en esa lista responde 422
+ * `id_not_in_recent_results` y el agent debe re-buscar.
+ *
+ * Bypass: si no hay header X-Session-Id, no hace nada (curl/scripts
+ * siguen funcionando exactamente como antes).
+ */
+class SessionGuard
+{
+    private const TTL = 600; // 10 min
+    private const DIR = '/tmp/wrapper_sessions';
+
+    private ?string $sessionId;
+    private bool $enabled;
+    private string $path = '';
+
+    public function __construct(?string $sessionId, array $config)
+    {
+        $this->sessionId = $sessionId;
+        // ON por defecto cuando viene X-Session-Id; config.session_guard=false
+        // actua como kill-switch sin redeploy si el guard rompe algo en prod.
+        $killed = isset($config['session_guard']) && $config['session_guard'] === false;
+        $this->enabled = $sessionId !== null && !$killed;
+        if ($this->enabled) {
+            if (!is_dir(self::DIR)) @mkdir(self::DIR, 0700, true);
+            $this->path = self::DIR . '/' . sha1($sessionId) . '.json';
+        }
+    }
+
+    /** Lista de wsIds conocidos para esta sesion (vacia si expiro o no hay sesion). */
+    private function load(): array
+    {
+        if (!$this->enabled || !is_file($this->path)) return [];
+        $age = time() - (int)@filemtime($this->path);
+        if ($age > self::TTL) { @unlink($this->path); return []; }
+        $raw = @file_get_contents($this->path);
+        if (!is_string($raw) || $raw === '') return [];
+        $data = json_decode($raw, true);
+        return is_array($data) && isset($data['ids']) && is_array($data['ids']) ? $data['ids'] : [];
+    }
+
+    private function save(array $ids): void
+    {
+        if (!$this->enabled) return;
+        $ids = array_values(array_unique(array_filter($ids, 'is_string')));
+        if (count($ids) > 200) $ids = array_slice($ids, -200); // cap por sesion
+        $tmp = $this->path . '.tmp';
+        @file_put_contents($tmp, json_encode(['updated_at' => time(), 'ids' => $ids]), LOCK_EX);
+        @rename($tmp, $this->path);
+    }
+
+    private function add(array $newIds): void
+    {
+        if (!$this->enabled) return;
+        $existing = $this->load();
+        $merged = array_merge($existing, array_filter($newIds, fn($v) => is_string($v) && $v !== ''));
+        $this->save($merged);
+    }
+
+    /** Llamado tras listRecords: registra todos los `id` devueltos. */
+    public function recordList(array $items): void
+    {
+        if (!$this->enabled) return;
+        $ids = [];
+        foreach ($items as $row) {
+            if (is_array($row) && isset($row['id']) && is_string($row['id'])) $ids[] = $row['id'];
+        }
+        if ($ids) $this->add($ids);
+    }
+
+    /** Llamado tras retrieve/create con la respuesta completa: registra el `id` del record. */
+    public function recordSingle(array $rec): void
+    {
+        if (!$this->enabled) return;
+        if (isset($rec['id']) && is_string($rec['id'])) $this->add([$rec['id']]);
+    }
+
+    /**
+     * Valida que `$id` esta entre los IDs que esta sesion ha visto recientemente.
+     * Acepta tanto el wsId completo (12x3357) como el crmid numerico (3357) si
+     * existe el wsId equivalente con cualquier prefijo. Si bypass (no
+     * sessionId), no hace nada.
+     */
+    public function assertKnown(string $module, string $id): void
+    {
+        if (!$this->enabled) return;
+        $known = $this->load();
+        if (in_array($id, $known, true)) return;
+        // tolerar crmid puro: si llega "3357" y conocemos "12x3357"
+        if (ctype_digit($id)) {
+            foreach ($known as $k) {
+                if (preg_match('/^\d+x' . preg_quote($id, '/') . '$/', $k)) return;
+            }
+        }
+        throw new ApiException(
+            'id_not_in_recent_results',
+            "L'ID $id non risulta da nessuna search recente in questa sessione. "
+            . "Esegui prima search_$module (o un altro search_*) per ottenere l'ID corretto, poi richiama l'operazione.",
+            422,
+            ['id' => $id, 'module' => $module, 'session_id' => $this->sessionId, 'known_count' => count($known)]
+        );
+    }
 }
 
 function readJsonBody(): array

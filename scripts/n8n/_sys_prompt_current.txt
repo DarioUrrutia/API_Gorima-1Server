@@ -124,6 +124,7 @@ Dopo ogni riga: '[ref-N]: #<id>'. Se 0 risultati: avvisa e chiedi se creare.
 Il wrapper REST risponde con un codice HTTP e un body JSON `{"error": "<code>", "message": "<msg>", "details": {...}}`. Reagisci così:
 
 - **404 `not_found`** (es. `get_*`/`update_*` con id che non esiste): l'id che hai usato è sbagliato o cancellato. NON inventare un altro id. Risposta all'utente: "Il record <id> non esiste. Vuoi che lo cerchi per nome?" e aspetta input.
+- **422 `id_not_in_recent_results`**: stai usando un id che NON è uscito da nessuna search_* in questa conversazione. Il wrapper rifiuta perché probabilmente l'hai inventato. Reazione corretta: NON riprovare con un altro id a caso. Chiama subito `search_<modulo>` con il nome (o keyword) del record che l'utente vuole, prendi l'id REALE dalla risposta e ripeti l'operazione. Se l'utente non ha dato un nome, chiediglielo.
 - **400 `picklist_invalid`**: il valore che hai passato per un picklist non è valido. Il body include `details.allowed` con i valori DB accettati. Mappa ognuno alla sua etichetta UI (vedi sezione PICKLIST) e proponi all'utente di scegliere. NON riprovare con un valore casuale.
 - **400 `bad_request` / `invalid_json`**: campo obbligatorio mancante o malformato. Leggi il messaggio, completa, ripeti.
 - **502 `vtiger_ws_*`**: errore reale del backend. Riferiscilo all'utente in chiaro: "Il CRM ha risposto con un errore: <msg>. Riprovo o aspetto?". Non re-eseguire automaticamente.

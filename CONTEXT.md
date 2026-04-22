@@ -292,6 +292,31 @@ Reglas personales:
          `INVALID_ID_FORMAT` no lo cubría → 502 opaco. Ahora la
          heurística usa `strpos($vtCode,'INVALID_')===0` + matches de
          mensaje "incorrect" / "id specified is incorrect").
+- [x] **SessionGuard server-side (2026-04-22)** — defensa real contra
+      alucinacion de IDs por el LLM. Diagnostico: EXEC 561 search devolvio
+      `12x3357`, EXEC 562 user dijo "ACTUALIZAR" y agent llamo `get_contact
+      id=12x9` (inventado). Las reglas en el prompt (`MAI inventare un id`)
+      no bastan — el LLM las ignora.
+      - Nueva clase `SessionGuard` en `rest-wrapper/api/index.php` que
+        cachea por session (file `/tmp/wrapper_sessions/<sha1>.json`,
+        TTL 10min) los wsIds devueltos por `search_*`, `retrieve` y
+        `create`. Cualquier `retrieve/update/delete/addComment` cuyo id
+        no este en cache responde `422 id_not_in_recent_results` con
+        mensaje claro. El agent debe re-buscar.
+      - Header: el cliente (n8n) envia `X-Session-Id: <sessionId>`.
+        Sin header → guard bypass (curl/scripts siguen igual).
+      - Kill-switch en `config.php`: `'session_guard' => false` para
+        desactivar sin redeploy si rompe algo en prod.
+      - Nota: Apache en Ubuntu corre con `PrivateTmp=yes`, por lo que
+        `/tmp/wrapper_sessions/` solo es visible desde el namespace de
+        Apache (via `/proc/<apache_pid>/root/tmp/...`). No afecta al
+        funcionamiento, solo al debug por SSH.
+      - n8n: `scripts/n8n/n8n_add_session_header.py` parchea los 14
+        toolHttpRequest para mandar el header con
+        `={{ $('When chat message received').item.json.sessionId }}`.
+      - Prompt: nueva regla 422 en `=== GESTIONE ERRORI DEL WRAPPER ===`.
+      - Smoke tests: `scripts/ssh/ssh_deploy_session_guard.py`
+        (5/5 happy paths pass; bypass pass).
 - [x] **n8n HTTP tool nodes con `neverError=true`**
       (`scripts/n8n/n8n_set_never_error.py`) en los 14 nodos
       toolHttpRequest. Sin esto n8n reemplazaba el body 4xx/5xx con un
